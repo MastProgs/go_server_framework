@@ -17,6 +17,9 @@ type Config struct {
 		Password string `json:"password"`
 		DBName   string `json:"dbname"`
 	} `json:"database"`
+	JWT struct {
+		Secret string `json:"secret"`
+	} `json:"jwt"`
 	// 추가 설정 필드들...
 }
 

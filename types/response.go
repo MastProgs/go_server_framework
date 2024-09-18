@@ -41,16 +41,22 @@ func CreateErrorResponse(errorCode int, description string) Response {
 func SendJSONResponse(w http.ResponseWriter, response Response) {
 	status := getHTTPStatus(response.Result)
 
+	// Content-Type 헤더 설정
 	w.Header().Set("Content-Type", "application/json")
 
+	// 응답 인코딩
 	jsonResponse, err := json.Marshal(response)
 	if err != nil {
+		// 인코딩 실패 시 에러 응답
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to encode response"})
 		return
 	}
 
+	// 상태 코드 설정 (한 번만 호출)
 	w.WriteHeader(status)
+
+	// JSON 응답 쓰기
 	w.Write(jsonResponse)
 }
 

@@ -8,5 +8,8 @@
       "user": "dbuser",
       "password": "dbpassword",
       "dbname": "myapp"
+    },
+    "jwt": {
+      "secret": "your-secret-key"
     }
   }
