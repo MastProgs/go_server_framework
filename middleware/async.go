@@ -5,20 +5,26 @@ import (
 	"sync"
 
 	workerpool "go_server_framework/core"
+	"go_server_framework/types"
 )
 
-func WorkerPoolMiddleware(pool *workerpool.WorkerPool, next http.HandlerFunc) http.HandlerFunc {
+func WorkerPoolMiddleware(pool *workerpool.WorkerPool, handler func() (interface{}, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 응답 작성을 동기화하기 위한 WaitGroup 사용
 		var wg sync.WaitGroup
 		wg.Add(1)
 
 		pool.Submit(func() {
 			defer wg.Done()
-			next.ServeHTTP(w, r)
+			data, err := handler()
+			if err != nil {
+				response := types.CreateErrorResponse(500, err.Error())
+				types.SendJSONResponse(w, response)
+				return
+			}
+			response := types.CreateSuccessResponse(data)
+			types.SendJSONResponse(w, response)
 		})
 
-		// 작업이 완료될 때까지 대기
 		wg.Wait()
 	}
 }
