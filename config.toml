@@ -1,0 +1,39 @@
+# 서버 설정
+[server]
+port = 8080
+host = "0.0.0.0"
+timeout = 30     # 초 단위
+
+# 로그 설정
+[log]
+level = "debug"              # debug, info, warn, error
+format = "json"              # text, json
+output = ["console", "file"] # console, file
+add_source = false           # 소스 정보 추가 여부
+
+# 파일 로그 설정
+[log.file]
+filename = "logs/server.log"
+max_size = 10                # MB
+max_backups = 5
+max_age = 30                 # 일
+compress = true
+
+# 데이터베이스 설정
+# 메인 데이터베이스 (MySQL)
+[database]
+type = "mysql"
+host = "localhost"
+port = 3306
+user = "root"
+password = ""
+dbname = "myapp"
+max_open_conns = 10
+max_idle_conns = 5
+conn_max_lifetime = 3600 # 초 단위
+
+# JWT 설정
+[jwt]
+secret = "your-secret-key"
+expiration = 86400          # 초 단위 (24시간)
+refresh_expiration = 604800 # 초 단위 (7일)

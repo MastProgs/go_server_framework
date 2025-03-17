@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	L "go_server_framework/loghandle"
 )
 
 func PingHandler(r *http.Request) (interface{}, error) {
+	L.Info("Ping Handler")
 	data := map[string]string{"msg": "pong"}
 	return data, nil
 }

@@ -4,44 +4,25 @@ import (
 	"net/http"
 
 	workerpool "go_server_framework/core"
-	"go_server_framework/handlers"
-	"go_server_framework/middleware"
 )
 
-var Pool *workerpool.WorkerPool
+var (
+	Pool    *workerpool.WorkerPool
+	Manager *RouterManager
+)
 
+// SetupRouter는 라우터를 설정하고 반환합니다
 func SetupRouter() *http.ServeMux {
-	if Pool == nil {
-		Pool = workerpool.NewWorkerPool()
+	// 라우터 관리자 생성
+	Manager = NewRouterManager()
+
+	return Manager.MainRouter
+}
+
+// RegisterServices는 서비스 등록 함수를 호출합니다
+// 이 함수는 init 패키지에서 호출됩니다
+func RegisterServices(registerFunc func(*RouterManager)) {
+	if Manager != nil {
+		registerFunc(Manager)
 	}
-
-	mux := http.NewServeMux()
-
-	// API 그룹
-	apiHandler := http.NewServeMux()
-	mux.Handle("/api/", http.StripPrefix("/api", apiHandler))
-
-	// /api/ping
-	apiHandler.Handle("/ping", middleware.WorkerPoolMiddleware(Pool, middleware.MethodHandler{
-		Get:  handlers.PingHandler,
-		Post: handlers.PostPingHandler,
-	}))
-
-	// 인증이 필요한 API 그룹
-	authApiHandler := http.NewServeMux()
-	apiHandler.Handle("/auth/", middleware.JWTAuthMiddleware(http.StripPrefix("/auth", authApiHandler)))
-
-	// 인증이 필요한 API 엔드포인트
-	// /api/auth/profile
-	authApiHandler.Handle("/profile", middleware.WorkerPoolMiddleware(Pool, middleware.MethodHandler{
-		Get:  handlers.GetProfileHandler,
-		Post: handlers.UpdateProfileHandler,
-	}))
-
-	// 인증 관련 엔드포인트
-	// /api/login
-	apiHandler.HandleFunc("/login", handlers.LoginHandler)
-	apiHandler.HandleFunc("/logout", handlers.LogoutHandler)
-
-	return mux
 }
