@@ -79,6 +79,25 @@ func InitLogger() {
 		}
 	}
 
-	// 로거 초기화 (싱글턴)
-	loghandle.InitLogger(logConfig)
+	// 비동기 로깅 설정
+	asyncEnabled := cfg.Log.AsyncEnabled
+	queueSize := cfg.Log.QueueSize
+
+	// 큐 크기가 지정되지 않은 경우 기본값 설정
+	if queueSize <= 0 {
+		queueSize = 1000 // 기본 큐 크기
+	}
+
+	// 로거 초기화 및 비동기 활성화
+	if asyncEnabled {
+		// 비동기 로깅으로 초기화
+		logger := loghandle.InitLoggerWithAsync(logConfig, queueSize)
+		if logger != nil {
+			fmt.Printf("비동기 로깅이 활성화되었습니다. 큐 크기: %d\n", queueSize)
+		}
+	} else {
+		// 동기 로깅으로 초기화
+		loghandle.InitLogger(logConfig)
+		fmt.Println("동기 로깅이 활성화되었습니다.")
+	}
 }

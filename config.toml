@@ -9,7 +9,9 @@ timeout = 30     # 초 단위
 level = "debug"              # debug, info, warn, error
 format = "json"              # text, json
 output = ["console", "file"] # console, file
-add_source = false           # 소스 정보 추가 여부
+add_source = true            # 소스 정보 추가 여부
+async_enabled = true         # 비동기 로깅 활성화 여부
+queue_size = 1000            # 비동기 로깅 큐 크기
 
 # 파일 로그 설정
 [log.file]

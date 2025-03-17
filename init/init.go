@@ -47,5 +47,9 @@ func ShutdownAll() {
 	// 여기에 다른 컴포넌트 종료 함수 호출
 	// 예: ShutdownCache(), ShutdownMessageQueue() 등
 
+	// 마지막 로그 메시지
 	loghandle.Info("애플리케이션 종료 완료")
+
+	// 로거 종료 (반드시 마지막에 실행)
+	loghandle.GetLogger().Close()
 }
