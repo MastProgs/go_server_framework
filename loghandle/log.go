@@ -79,7 +79,6 @@ type Logger struct {
 // 싱글턴 인스턴스와 뮤텍스
 var (
 	instance *Logger
-	once     sync.Once
 	mu       sync.Mutex
 )
 
@@ -198,10 +197,21 @@ func (l *Logger) Log(level LogLevel, format string, args ...any) {
 	var msg string
 	var slogArgs []any
 
+	// 소스 정보가 이미 있는지 확인
+	hasSource := false
+	for i := 0; i < len(args); i += 2 {
+		if i+1 < len(args) {
+			if key, ok := args[i].(string); ok && key == "source" {
+				hasSource = true
+				break
+			}
+		}
+	}
+
 	// 포맷 문자열 처리
 	if hasFormatSpecifier(format) && len(args) > 0 {
 		// 키-값 쌍 형식인지 확인
-		if len(args) >= 2 && len(args)%2 == 0 {
+		if len(args) >= 2 && len(args)%2 == 0 && !hasFormatSpecifier(format) {
 			// 첫 번째 인자가 문자열인지 확인
 			if _, ok := args[0].(string); ok {
 				// 키-값 쌍으로 처리
@@ -224,9 +234,10 @@ func (l *Logger) Log(level LogLevel, format string, args ...any) {
 	}
 
 	// 소스 정보 추가 (AddSource가 false인 경우에도 직접 추가)
-	if !l.config.AddSource {
-		// 호출자 정보 가져오기 (2 프레임 위로 올라가서 실제 호출 위치 찾기)
-		_, file, line, ok := runtime.Caller(2)
+	if !l.config.AddSource && !hasSource {
+		// 호출자 정보 가져오기 (3 프레임 위로 올라가서 실제 호출 위치 찾기)
+		// 호출 스택: 실제 호출 위치 -> Debug/Info/Warn/Error -> Log
+		_, file, line, ok := runtime.Caller(3)
 		if ok {
 			// 파일 경로에서 패키지 이름 추출
 			pkgName := filepath.Base(filepath.Dir(file))
@@ -300,18 +311,99 @@ func (l *Logger) GetSlogLogger() *slog.Logger {
 }
 
 // 전역 함수들 - 싱글턴 로거를 통해 로그 기록
+// 각 함수는 직접 소스 위치를 추적하여 Log 함수에 전달합니다
 func Debug(format string, args ...any) {
-	GetLogger().Debug(format, args...)
+	// 호출자 정보 가져오기
+	_, file, line, ok := runtime.Caller(1)
+	if ok && !GetLogger().config.AddSource {
+		// 파일 경로에서 패키지 이름 추출
+		pkgName := filepath.Base(filepath.Dir(file))
+		funcName := filepath.Base(file)
+
+		// 파일 이름에서 확장자 제거
+		if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+			funcName = funcName[:idx]
+		}
+
+		// 소스 정보 추가
+		newArgs := make([]any, len(args)+2)
+		copy(newArgs, args)
+		newArgs[len(args)] = "source"
+		newArgs[len(args)+1] = fmt.Sprintf("%s/%s:%d", pkgName, funcName, line)
+		GetLogger().Log(LevelDebug, format, newArgs...)
+	} else {
+		GetLogger().Debug(format, args...)
+	}
 }
 
 func Info(format string, args ...any) {
-	GetLogger().Info(format, args...)
+	// 호출자 정보 가져오기
+	_, file, line, ok := runtime.Caller(1)
+	if ok && !GetLogger().config.AddSource {
+		// 파일 경로에서 패키지 이름 추출
+		pkgName := filepath.Base(filepath.Dir(file))
+		funcName := filepath.Base(file)
+
+		// 파일 이름에서 확장자 제거
+		if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+			funcName = funcName[:idx]
+		}
+
+		// 소스 정보 추가
+		newArgs := make([]any, len(args)+2)
+		copy(newArgs, args)
+		newArgs[len(args)] = "source"
+		newArgs[len(args)+1] = fmt.Sprintf("%s/%s:%d", pkgName, funcName, line)
+		GetLogger().Log(LevelInfo, format, newArgs...)
+	} else {
+		GetLogger().Info(format, args...)
+	}
 }
 
 func Warn(format string, args ...any) {
-	GetLogger().Warn(format, args...)
+	// 호출자 정보 가져오기
+	_, file, line, ok := runtime.Caller(1)
+	if ok && !GetLogger().config.AddSource {
+		// 파일 경로에서 패키지 이름 추출
+		pkgName := filepath.Base(filepath.Dir(file))
+		funcName := filepath.Base(file)
+
+		// 파일 이름에서 확장자 제거
+		if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+			funcName = funcName[:idx]
+		}
+
+		// 소스 정보 추가
+		newArgs := make([]any, len(args)+2)
+		copy(newArgs, args)
+		newArgs[len(args)] = "source"
+		newArgs[len(args)+1] = fmt.Sprintf("%s/%s:%d", pkgName, funcName, line)
+		GetLogger().Log(LevelWarn, format, newArgs...)
+	} else {
+		GetLogger().Warn(format, args...)
+	}
 }
 
 func Error(format string, args ...any) {
-	GetLogger().Error(format, args...)
+	// 호출자 정보 가져오기
+	_, file, line, ok := runtime.Caller(1)
+	if ok && !GetLogger().config.AddSource {
+		// 파일 경로에서 패키지 이름 추출
+		pkgName := filepath.Base(filepath.Dir(file))
+		funcName := filepath.Base(file)
+
+		// 파일 이름에서 확장자 제거
+		if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+			funcName = funcName[:idx]
+		}
+
+		// 소스 정보 추가
+		newArgs := make([]any, len(args)+2)
+		copy(newArgs, args)
+		newArgs[len(args)] = "source"
+		newArgs[len(args)+1] = fmt.Sprintf("%s/%s:%d", pkgName, funcName, line)
+		GetLogger().Log(LevelError, format, newArgs...)
+	} else {
+		GetLogger().Error(format, args...)
+	}
 }
