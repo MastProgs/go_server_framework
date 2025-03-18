@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,7 +61,55 @@ func connect() error {
 		return fmt.Errorf("MySQL 연결 테스트 실패: %w", err)
 	}
 
+	// SQL 모드 확인 및 조정
+	if err := checkAndAdjustSQLMode(); err != nil {
+		loghandle.Warn("SQL 모드 조정 실패, 계속 진행합니다: %v", err)
+	}
+
 	loghandle.Info("MySQL 데이터베이스 연결 성공: %s", cfg.Database.DBName)
+	return nil
+}
+
+// checkAndAdjustSQLMode는 SQL 모드를 확인하고 필요한 경우 조정합니다
+func checkAndAdjustSQLMode() error {
+	// 연결이 없으면 무시
+	if db == nil {
+		return nil
+	}
+
+	// 현재 SQL 모드 확인
+	var sqlMode string
+	query := "SELECT @@sql_mode"
+	err := db.QueryRow(query).Scan(&sqlMode)
+	if err != nil {
+		loghandle.Warn("SQL 모드 확인 실패: %v", err)
+		return err
+	}
+
+	loghandle.Debug("현재 SQL 모드: %s", sqlMode)
+
+	// 필요한 경우 SQL 모드 조정 (zero datetime 처리 관련)
+	if strings.Contains(sqlMode, "NO_ZERO_DATE") || strings.Contains(sqlMode, "NO_ZERO_IN_DATE") {
+		// 엄격한 날짜 모드 제거
+		newMode := strings.Replace(sqlMode, "NO_ZERO_DATE,", "", -1)
+		newMode = strings.Replace(newMode, ",NO_ZERO_DATE", "", -1)
+		newMode = strings.Replace(newMode, "NO_ZERO_DATE", "", -1)
+
+		newMode = strings.Replace(newMode, "NO_ZERO_IN_DATE,", "", -1)
+		newMode = strings.Replace(newMode, ",NO_ZERO_IN_DATE", "", -1)
+		newMode = strings.Replace(newMode, "NO_ZERO_IN_DATE", "", -1)
+
+		// 새 모드 설정
+		setModeQuery := fmt.Sprintf("SET SESSION sql_mode = '%s'", newMode)
+		_, err = db.Exec(setModeQuery)
+		if err != nil {
+			loghandle.Warn("SQL 모드 설정 실패: %v", err)
+			return err
+		}
+
+		loghandle.Info("SQL 모드 조정됨: %s", newMode)
+	}
+
 	return nil
 }
 

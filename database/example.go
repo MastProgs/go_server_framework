@@ -8,15 +8,15 @@ import (
 	"go_server_framework/loghandle"
 )
 
-// TblTest는 예제 테이블 모델입니다
+// TblTest는 예제 테이블 모델입니다 - 현재 Null:"true" 는 정상작동 하지 않음
 type TblTest struct {
-	ID        int64     `pk:"true" auto:"true"`       // db 태그 없이 자동으로 "id"로 변환
-	Name      string    `length:"10"`                 // db 태그 없이 자동으로 "name"으로 변환
-	Value     float64   `default:"0.0"`               // db 태그 없이 자동으로 "value"로 변환
-	Active    bool      `default:"1"`                 // db 태그 없이 자동으로 "active"로 변환
-	CreatedAt time.Time `default:"CURRENT_TIMESTAMP"` // db 태그 없이 자동으로 "created_at"으로 변환
-	UpdatedAt time.Time `default:"CURRENT_TIMESTAMP"` // db 태그 없이 자동으로 "updated_at"으로 변환
-	UserEmail string    `Null:"true" length:"10"`
+	Id        int64     `pk:"true" auto:"true"`                                   // db 태그 없이 자동으로 "id"로 변환
+	Name      string    `default:"" length:"100"`                                 // db 태그 없이 자동으로 "name"으로 변환
+	Value     float64   `default:"0.0"`                                           // db 태그 없이 자동으로 "value"로 변환
+	Active    bool      `default:"1"`                                             // db 태그 없이 자동으로 "active"로 변환
+	CreatedAt time.Time `default:"CURRENT_TIMESTAMP"`                             // db 태그 없이 자동으로 "created_at"으로 변환
+	UpdatedAt time.Time `default:"CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"` // 자동으로 업데이트됨
+	UserEmail string    `default:"" length:"100"`
 }
 
 // ExampleUsage는 ORM 사용 예제를 보여줍니다
@@ -97,12 +97,83 @@ func ExampleUsage() {
 	}
 	loghandle.Info("업데이트된 행 수: %d", affected)
 
+	// UpdateFields 예제 (특정 필드만 업데이트)
+	loghandle.Info("=== UpdateFields 예제 ===")
+	fieldsToUpdate := map[string]interface{}{
+		"name":  "선택적으로 업데이트된 이름",
+		"value": 123.456,
+	}
+
+	affected, err = repo.UpdateFields(getTableName(result), fieldsToUpdate, map[string]interface{}{"id": id})
+	if err != nil {
+		loghandle.Error("선택적 필드 업데이트 오류: %v", err)
+	} else {
+		loghandle.Info("선택적 필드 업데이트 행 수: %d", affected)
+	}
+
+	// UpdateFieldsByStruct 예제
+	loghandle.Info("=== UpdateFieldsByStruct 예제 ===")
+	updatedRecord := TblTest{
+		Name:      "구조체로 업데이트된 이름",
+		Value:     789.012,
+		Active:    false,
+		UserEmail: "test@example.com",
+	}
+
+	// 업데이트할 필드 이름 목록
+	fieldNames := []string{"Name", "Value"}
+
+	affected, err = repo.UpdateFieldsByStruct(updatedRecord, fieldNames, map[string]interface{}{"id": id})
+	if err != nil {
+		loghandle.Error("구조체 선택적 필드 업데이트 오류: %v", err)
+	} else {
+		loghandle.Info("구조체 선택적 필드 업데이트 행 수: %d", affected)
+	}
+
+	// UpdateNonZero 예제 - zero value가 아닌 필드만 업데이트
+	loghandle.Info("=== UpdateNonZero 예제 ===")
+	nonZeroRecord := TblTest{
+		// Id 필드는 기본 키이므로 무시됨
+		Name:   "Zero가 아닌 필드만 업데이트", // 이 필드만 업데이트됨
+		Value:  0,                   // zero value이므로 업데이트되지 않음
+		Active: false,               // bool의 경우 false가 zero value이므로 업데이트되지 않음
+	}
+
+	affected, err = repo.UpdateNonZero(nonZeroRecord, map[string]interface{}{"id": id})
+	if err != nil {
+		loghandle.Error("Zero가 아닌 필드 업데이트 오류: %v", err)
+	} else {
+		loghandle.Info("Zero가 아닌 필드 업데이트 행 수: %d", affected)
+	}
+
+	// 원본과 비교하여 변경된 필드만 업데이트
+	loghandle.Info("=== 원본과 비교하여 변경된 필드만 업데이트 ===")
+	// 원본 데이터 조회
+	var originalRecord TblTest
+	err = repo.FindOne(&originalRecord, map[string]interface{}{"id": id})
+	if err != nil {
+		loghandle.Error("원본 데이터 조회 오류: %v", err)
+	} else {
+		// 원본과 변경된 데이터 준비
+		modifiedRecord := originalRecord     // 원본 복사
+		modifiedRecord.Name = "변경된 이름만 업데이트" // 이 필드만 변경
+
+		// 원본과 비교하여 변경된 필드만 업데이트
+		affected, err = repo.UpdateNonZero(modifiedRecord, map[string]interface{}{"id": id}, originalRecord)
+		if err != nil {
+			loghandle.Error("변경된 필드 업데이트 오류: %v", err)
+		} else {
+			loghandle.Info("변경된 필드 업데이트 행 수: %d", affected)
+		}
+	}
+
 	// UPSERT 예제
 	upsertRecord := TblTest{
-		ID:     id,
-		Name:   "UPSERT 테스트",
-		Value:  555.55,
-		Active: true,
+		Id:        id,
+		Name:      "UPSERT 테스트",
+		Value:     555.55,
+		Active:    true,
+		CreatedAt: time.Now(),
 	}
 
 	upsertID, err := repo.UpsertStruct(upsertRecord)
@@ -112,9 +183,51 @@ func ExampleUsage() {
 	}
 	loghandle.Info("UPSERT 결과: %d", upsertID)
 
+	// UpsertNonZero 예제 - zero가 아닌 필드만 업데이트
+	loghandle.Info("=== UpsertNonZero 예제 ===")
+	nonZeroUpsertRecord := TblTest{
+		Id:   id, // 기존 레코드 업데이트를 위한 ID
+		Name: "NonZero로 업데이트된 이름",
+		// Value와 Active 필드는 zero 값이므로 업데이트되지 않음
+	}
+
+	nonZeroID, err := repo.UpsertNonZero(nonZeroUpsertRecord)
+	if err != nil {
+		loghandle.Error("UpsertNonZero 오류: %v", err)
+	} else {
+		loghandle.Info("UpsertNonZero 결과: %d", nonZeroID)
+
+		// 결과 확인
+		var updatedRecord TblTest
+		err = repo.FindOne(&updatedRecord, map[string]interface{}{"id": nonZeroID})
+		if err != nil {
+			loghandle.Error("업데이트된 레코드 조회 오류: %v", err)
+		} else {
+			loghandle.Info("UpsertNonZero 결과 레코드: %+v", updatedRecord)
+		}
+	}
+
+	// UPSERT 예제
+	upsertNewRecord := TblTest{
+		Id:        9999,
+		Name:      "새로운 UPSERT 삽입 테스트",
+		Value:     555.55,
+		Active:    true,
+		CreatedAt: time.Now(),
+	}
+
+	upsertNewID, err := repo.UpsertStruct(upsertNewRecord)
+	if err != nil {
+		loghandle.Error("UPSERT 오류: %v", err)
+		return
+	}
+	loghandle.Info("UPSERT 결과: %d", upsertNewID)
+
 	// 다수 레코드 조회
 	var records []TblTest
-	err = repo.FindAllByQuery(&records, "SELECT * FROM tbl_test WHERE active = ?", true)
+	err = repo.FindAll(&records, &FindOptions{
+		Where: map[string]interface{}{"active": true},
+	})
 	if err != nil {
 		loghandle.Error("다수 데이터 조회 오류: %v", err)
 		return
@@ -192,16 +305,64 @@ func ExampleUsage() {
 
 	// 6. NULL 값 처리 예제
 	loghandle.Info("=== NULL 값 처리 예제 ===")
+
+	// NULL 값이 있는 테스트 데이터 삽입
+	nullTest := &TblTest{
+		Name:   "NULL 테스트",
+		Value:  123,
+		Active: true,
+	}
+	// UserEmail 필드는 의도적으로 NULL로 둠
+
+	nullID, err := repo.InsertStruct(*nullTest)
+	if err != nil {
+		loghandle.Error("NULL 테스트 데이터 삽입 오류: %v", err)
+	} else {
+		loghandle.Info("NULL 테스트 데이터 ID: %d", nullID)
+	}
+
+	// NULL 값이 있는 레코드 조회
+	var nullRecord TblTest
+	err = repo.FindOne(&nullRecord, map[string]interface{}{
+		"id": nullID,
+	})
+
+	if err != nil {
+		loghandle.Error("NULL 값 레코드 조회 오류: %v", err)
+	} else {
+		loghandle.Info("NULL 값 레코드: %+v", nullRecord)
+		loghandle.Info("  - Email 필드 (NULL): '%s'", nullRecord.UserEmail)
+	}
+
+	// NULL 조건으로 검색
 	var nullUsers []TblTest
 	err = repo.Find(&nullUsers, &FindOptions{
 		Where: map[string]interface{}{
-			"user_email__null": false, // NOT NULL 조건
+			"user_email__null": true, // user_email이 NULL인 레코드 조회
 		},
 	})
+
 	if err != nil {
 		loghandle.Error("NULL 처리 오류: %v", err)
 	} else {
-		loghandle.Info("이메일이 있는 사용자 수: %d", len(nullUsers))
+		loghandle.Info("이메일이 NULL인 사용자 수: %d", len(nullUsers))
+		for i, u := range nullUsers {
+			loghandle.Info("  %d: %+v", i+1, u)
+		}
+	}
+
+	// NULL이 아닌 조건으로 검색
+	var notNullUsers []TblTest
+	err = repo.Find(&notNullUsers, &FindOptions{
+		Where: map[string]interface{}{
+			"user_email__null": false, // user_email이 NULL이 아닌 레코드 조회
+		},
+	})
+
+	if err != nil {
+		loghandle.Error("NULL 아님 처리 오류: %v", err)
+	} else {
+		loghandle.Info("이메일이 NULL이 아닌 사용자 수: %d", len(notNullUsers))
 	}
 
 	// 7. 완전히 동적인 쿼리 구성 예제
@@ -293,7 +454,7 @@ func BatchExample() {
 
 	// DELETE 작업 추가
 	deleteRecord := TblTest{}
-	if err := batch.AddDelete(deleteRecord, map[string]interface{}{"id": 2}); err != nil {
+	if err := batch.AddDelete(deleteRecord, map[string]interface{}{"id": 10000}); err != nil {
 		loghandle.Error("배치 DELETE 추가 오류: %v", err)
 		batch.Rollback()
 		return
