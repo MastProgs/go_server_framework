@@ -10,6 +10,7 @@ import (
 	"github.com/dgrijalva/jwt-go"
 
 	"go_server_framework/config"
+	"go_server_framework/database"
 	"go_server_framework/loghandle"
 )
 
@@ -34,14 +35,9 @@ func EchoHandler(r *http.Request) (interface{}, error) {
 	return data, nil
 }
 
-// InfoHandler는 테스트 서비스 정보를 반환합니다
-func InfoHandler(r *http.Request) (interface{}, error) {
-	data := map[string]interface{}{
-		"service":     "Test Service",
-		"version":     "1.0.0",
-		"description": "테스트 서비스 예제",
-	}
-	return data, nil
+func DBTestHandler(r *http.Request) (interface{}, error) {
+	database.ExampleUsage()
+	return nil, nil
 }
 
 // ProtectedHandler는 JWT 인증이 필요한 보호된 엔드포인트입니다

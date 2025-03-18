@@ -25,8 +25,8 @@ func RegisterRoutes(manager interface{}) {
 		Post: EchoHandler,
 	})
 
-	testRouter.Method("/info", middleware.MethodHandler{
-		Get: InfoHandler,
+	testRouter.Method("/dbtest", middleware.MethodHandler{
+		Get: DBTestHandler,
 	})
 
 	// 로그인 핸들러 등록
