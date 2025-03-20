@@ -1427,7 +1427,7 @@ func scanWithNullCheck(rows *sql.Rows, columns []string, dest interface{}) error
 func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) error {
 	options := &FindOptions{
 		Where: where,
-		Limit: 1,
+		// Limit: 1,
 	}
 
 	// 테이블 이름 가져오기
@@ -1444,10 +1444,10 @@ func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) err
 
 	// 쿼리 생성
 	var queryBuilder strings.Builder
-	queryBuilder.WriteString(fmt.Sprintf("SELECT "))
+	queryBuilder.WriteString("SELECT ")
 
 	// 컬럼 선택
-	if options != nil && len(options.Columns) > 0 {
+	if len(options.Columns) > 0 {
 		columns := make([]string, len(options.Columns))
 		for i, col := range options.Columns {
 			columns[i] = "`" + col + "`"
@@ -1470,7 +1470,7 @@ func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) err
 
 	// WHERE 절 구성
 	var params []interface{}
-	if options != nil && len(options.Where) > 0 {
+	if len(options.Where) > 0 {
 		queryBuilder.WriteString(" WHERE ")
 		conditions := make([]string, 0, len(options.Where))
 
@@ -2205,9 +2205,9 @@ func (r *Repository) DeleteStruct(obj interface{}, where map[string]interface{})
 }
 
 // isTimestampField checks if the field is a timestamp field
-func isTimestampField(field reflect.StructField) bool {
-	return field.Type == reflect.TypeOf(time.Time{})
-}
+// func isTimestampField(field reflect.StructField) bool {
+// 	return field.Type == reflect.TypeOf(time.Time{})
+// }
 
 // UpsertNonZero는 제로값이 아닌 필드만 사용하여 새 레코드를 삽입하거나 기존 레코드를 업데이트합니다
 func (r *Repository) UpsertNonZero(obj interface{}) (int64, error) {

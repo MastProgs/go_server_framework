@@ -9,6 +9,9 @@ import (
 )
 
 // TblTest는 예제 테이블 모델입니다 - 현재 Null:"true" 는 정상작동 하지 않음
+// 테이블 타입이 TblTest 인 경우, 테이블 이름은 "tbl_test" 로 자동 변환됩니다.
+// Id 필드 또한 네이밍을 ID 로 하게 되는경우, 대문자를 기준으로 자동 변환하여 "i_d" 로 변환되기 때문에, 네이밍 규칙을 지키는것이 좋습니다.
+// CreatedAt 필드 또한, 대문자를 기준으로 자동 변환하여 "created_at" 으로 변환됩니다.
 type TblTest struct {
 	Id        int64     `pk:"true" auto:"true"`                                   // db 태그 없이 자동으로 "id"로 변환
 	Name      string    `default:"" length:"100"`                                 // db 태그 없이 자동으로 "name"으로 변환
