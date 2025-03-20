@@ -42,37 +42,26 @@
 ### 기본 서버 실행
 
 ```go
-package main
+package services
 
 import (
-    "go_server_framework/config"
-    "go_server_framework/loghandle"
-    "go_server_framework/router"
+	"go_server_framework/loghandle"
+	"go_server_framework/router"
+	"go_server_framework/services/test"
 )
 
-func main() {
-    // 로거 초기화
-    logConfig := loghandle.LogConfig{
-        Level:     loghandle.LevelInfo,
-        Format:    loghandle.FormatJSON,
-        Output:    int(loghandle.OutputConsole),
-        AddSource: true,
-    }
-    loghandle.InitLogger(logConfig)
-    
-    // 라우터 초기화
-    r := router.NewRouter()
-    
-    // 엔드포인트 등록
-    r.GET("/hello", func(c *router.Context) {
-        c.JSON(200, map[string]interface{}{
-            "message": "Hello, World!",
-        })
-    })
-    
-    // 서버 시작
-    r.Run(":8080")
+// RegisterAllServices는 모든 서비스를 등록합니다
+func RegisterAllServices(manager *router.RouterManager) {
+	// 테스트 서비스 등록
+	test.RegisterRoutes(manager)
+	loghandle.Info("테스트 서비스 등록 완료")
+
+	// 여기에 추가 서비스 등록
+	// 예: user.RegisterRoutes(manager)
+	// 예: blog.RegisterRoutes(manager)
+	// 예: shop.RegisterRoutes(manager)
 }
+
 ```
 
 ## 로깅 시스템
