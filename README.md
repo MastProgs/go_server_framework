@@ -39,14 +39,6 @@
 
 ## 시작하기
 
-### 설치
-
-```bash
-git clone https://github.com/yourusername/go_server_framework.git
-cd go_server_framework
-go mod tidy
-```
-
 ### 기본 서버 실행
 
 ```go
