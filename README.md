@@ -207,95 +207,6 @@ r := router.NewRouterWithConfig(router.RouterConfig{
 })
 ```
 
-### 엔드포인트 등록
-
-다양한 HTTP 메서드에 대한 핸들러를 등록할 수 있습니다:
-
-```go
-// 기본 라우트
-r.GET("/users", listUsers)
-r.POST("/users", createUser)
-r.PUT("/users/:id", updateUser)
-r.DELETE("/users/:id", deleteUser)
-
-// 그룹화된 라우트
-api := r.Group("/api")
-{
-    v1 := api.Group("/v1")
-    {
-        v1.GET("/products", listProducts)
-        v1.POST("/products", createProduct)
-    }
-}
-
-// 핸들러 함수 정의
-func listUsers(c *router.Context) {
-    c.JSON(200, map[string]interface{}{
-        "users": []string{"user1", "user2"},
-    })
-}
-```
-
-### 미들웨어
-
-미들웨어를 사용하여, 요청 처리 파이프라인에 추가 기능을 넣을 수 있습니다:
-
-```go
-// 전역 미들웨어
-r.Use(router.Logger(), router.Recovery())
-
-// 그룹 미들웨어
-api := r.Group("/api", router.Auth())
-
-// 라우트별 미들웨어
-r.GET("/admin", adminHandler, router.AdminAuth())
-```
-
-사용자 정의 미들웨어 생성:
-
-```go
-func MyMiddleware() router.HandlerFunc {
-    return func(c *router.Context) {
-        // 요청 처리 전 작업
-        startTime := time.Now()
-        
-        // 다음 핸들러 호출
-        c.Next()
-        
-        // 요청 처리 후 작업
-        duration := time.Since(startTime)
-        loghandle.Info("요청 처리 시간", "path", c.Path(), "duration", duration.String())
-    }
-}
-```
-
-### 요청 처리
-
-컨텍스트 객체를 통해 요청을 처리할 수 있습니다:
-
-```go
-func userHandler(c *router.Context) {
-    // URL 파라미터
-    id := c.Param("id")
-    
-    // 쿼리 파라미터
-    page := c.Query("page", "1") // 기본값 1
-    
-    // 폼 데이터
-    name := c.PostForm("name")
-    
-    // JSON 바디
-    var user User
-    if err := c.BindJSON(&user); err != nil {
-        c.JSON(400, map[string]string{"error": "잘못된 요청 형식"})
-        return
-    }
-    
-    // 헤더 접근
-    token := c.GetHeader("Authorization")
-}
-```
-
 ### 응답 작성
 
 다양한 형식으로 응답을 보낼 수 있습니다:
@@ -354,39 +265,6 @@ if err != nil {
 port := config.GetInt("server.port")
 ```
 
-## 에러 처리
-
-일관된 에러 처리를 위한 표준화된 에러 생성 및, 응답 기능을 제공합니다:
-
-```go
-import "go_server_framework/errors"
-
-// 에러 생성
-err := errors.New("오류 메시지")
-err := errors.Newf("ID %d를 찾을 수 없습니다", id)
-err := errors.WithCode(404, "리소스를 찾을 수 없습니다")
-err := errors.WithStack(originalError) // 스택 트레이스 포함
-
-// 컨텍스트에서 사용
-if user == nil {
-    return errors.NotFound("사용자를 찾을 수 없습니다")
-}
-
-// HTTP 응답 예시
-func getUser(c *router.Context) {
-    user, err := userService.GetUser(id)
-    if err != nil {
-        if errors.Is(err, errors.NotFound) {
-            c.Error(404, "사용자를 찾을 수 없습니다")
-            return
-        }
-        c.Error(500, "서버 오류")
-        return
-    }
-    
-    c.JSON(200, user)
-}
-```
 
 ## 프로젝트 구조
 
@@ -395,8 +273,7 @@ go_server_framework/
 ├── config/           # 설정 관리
 │   ├── config.go     # 설정 로드/파싱
 │   └── config.toml   # 기본 설정 파일
-├── errors/           # 에러 처리
-│   └── errors.go     # 에러 유틸리티
+├── database/         # 데이터베이스 관리
 ├── loghandle/        # 로깅 시스템
 │   └── log.go        # 로그 핸들러
 ├── router/           # 라우팅 시스템
