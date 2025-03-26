@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/go-sql-driver/mysql v1.9.0
+	github.com/robfig/cron/v3 v3.0.1
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 

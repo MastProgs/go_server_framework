@@ -10,9 +10,12 @@ type Config struct {
 
 // ServerConfig는 서버 관련 설정을 정의합니다
 type ServerConfig struct {
-	Port    int    `toml:"port"`
-	Host    string `toml:"host"`
-	Timeout int    `toml:"timeout"` // 초 단위
+	Port     int    `toml:"port"`
+	Host     string `toml:"host"`
+	Timeout  int    `toml:"timeout"` // 초 단위
+	Debug    bool   `toml:"debug"`
+	Certfile string `toml:"certfile"`
+	Keyfile  string `toml:"keyfile"`
 }
 
 // LogConfig는 로깅 관련 설정을 정의합니다

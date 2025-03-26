@@ -4,12 +4,13 @@ import (
 	"net/http"
 
 	"go_server_framework/loghandle"
+	"go_server_framework/loop"
 )
 
 var Router *http.ServeMux
 
 // InitAll은 애플리케이션의 모든 컴포넌트를 초기화합니다
-func InitAll() {
+func InitAll() (err error) {
 	// 설정 초기화 (가장 먼저 초기화해야 함)
 	InitConfig()
 
@@ -32,10 +33,16 @@ func InitAll() {
 	// 예: InitCache(), InitMessageQueue() 등
 
 	loghandle.Info("애플리케이션 초기화 완료")
+	return nil
+}
+
+func PreInit() (err error) {
+	loop.SetupCronJobs()
+	return nil
 }
 
 // ShutdownAll은 애플리케이션의 모든 컴포넌트를 정리합니다
-func ShutdownAll() {
+func ShutdownAll() (err error) {
 	loghandle.Info("애플리케이션 종료 시작")
 
 	// 라우터 종료 (워커 풀 포함)
@@ -52,4 +59,6 @@ func ShutdownAll() {
 
 	// 로거 종료 (반드시 마지막에 실행)
 	loghandle.GetLogger().Close()
+
+	return nil
 }
