@@ -43,7 +43,10 @@ func (rm *RouterManager) RegisterSubRouter(name string, basePath string) *SubRou
 
 	subRouter := NewSubRouter(name, basePath, rm.Pool)
 
-	// 기본 미들웨어 적용 - 요청 로깅
+	// 기본 미들웨어 적용
+	// CORS 미들웨어 적용
+	subRouter.Use(middleware.CORSMiddleware)
+	// 로깅 미들웨어 적용
 	subRouter.Use(middleware.RequestLoggerMiddleware)
 
 	rm.SubRouters[name] = subRouter
