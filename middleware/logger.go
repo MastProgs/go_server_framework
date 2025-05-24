@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -83,9 +83,100 @@ const (
 
 // 이미 로깅된 요청을 추적하기 위한 맵과 뮤텍스
 var (
-	loggedRequests   = make(map[string]time.Time)
-	loggedRequestsMu sync.Mutex
+	logChan = make(chan LogData, 1000) // 로그 데이터를 전달하기 위한 채널
 )
+
+// LogData는 로깅에 필요한 데이터를 담는 구조체
+type LogData struct {
+	OriginalPath  string
+	StartTime     time.Time
+	StatusCode    int
+	Method        string
+	MethodColor   string
+	StatusColor   string
+	Duration      time.Duration
+	ClientIP      string
+	UserAgent     string
+	Written       int
+	QueryParams   string
+	ExcludedPaths []string
+}
+
+// init 함수에서 로깅 고루틴 시작
+func init() {
+	go loggerWorker()
+}
+
+// loggerWorker는 로그 채널에서 데이터를 읽어 로깅을 처리하는 고루틴
+func loggerWorker() {
+	for logData := range logChan {
+		// 한 줄로 요청 정보 출력
+		fmt.Printf("%s[%s]%s %s%d%s %s%s%s %s%.2fms%s %s%s%s %s%s%s %s%s%s %s%d bytes%s\n",
+			Yellow, logData.StartTime.Format("2006-01-02 15:04:05.000"), Reset,
+			logData.StatusColor, logData.StatusCode, Reset,
+			logData.MethodColor, logData.Method, Reset,
+			BoldBlue, float64(logData.Duration.Microseconds())/1000.0, Reset,
+			Cyan, logData.ClientIP, Reset,
+			Blue, logData.OriginalPath, Reset,
+			Purple, truncateString(logData.UserAgent, 30), Reset,
+			Green, logData.Written, Reset,
+		)
+
+		// 쿼리 파라미터가 있고, 제외 경로가 아닌 경우 상세 로깅
+		if logData.QueryParams != "" {
+			// 제외 경로 목록에 있는지 확인
+			skipDetailedLogging := false
+			for _, path := range logData.ExcludedPaths {
+				if logData.OriginalPath == path || strings.HasPrefix(logData.OriginalPath, path+"/") {
+					skipDetailedLogging = true
+					break
+				}
+			}
+
+			if !skipDetailedLogging {
+				// 쿼리 파라미터를 별도 줄에 표시
+				fmt.Printf("  %s쿼리 파라미터:%s\n", Yellow, Reset)
+				params := strings.Split(logData.QueryParams, "&")
+				for _, param := range params {
+					kv := strings.SplitN(param, "=", 2)
+					key := kv[0]
+					value := ""
+					if len(kv) > 1 {
+						value = kv[1]
+
+						// URL 디코딩 시도
+						if decodedValue, err := url.QueryUnescape(value); err == nil {
+							value = decodedValue
+						}
+
+						// 콤마로 구분된 배열 값 처리
+						if strings.Contains(value, ",") {
+							items := strings.Split(value, ",")
+							if len(items) > 1 {
+								fmt.Printf("    %s%s%s : %s배열(%d개)%s\n",
+									Cyan, key, Reset,
+									Yellow, len(items), Reset)
+
+								// 각 항목을 별도 줄에 표시
+								for i, item := range items {
+									fmt.Printf("      %s[%d]%s %s%s%s\n",
+										Yellow, i, Reset,
+										Green, item, Reset)
+								}
+								continue // 기본 출력을 건너뛰고 다음 파라미터로
+							}
+						}
+					}
+
+					// 일반 키-값 쌍 출력
+					fmt.Printf("    %s%s%s : %s%s%s\n",
+						Cyan, key, Reset,
+						Green, value, Reset)
+				}
+			}
+		}
+	}
+}
 
 // RequestLoggerMiddleware는 HTTP 요청 정보를 콘솔에 출력하는 미들웨어입니다
 func RequestLoggerMiddleware(next http.Handler) http.Handler {
@@ -114,66 +205,6 @@ func RequestLoggerMiddleware(next http.Handler) http.Handler {
 			clientIP = forwardedFor
 		}
 
-		// 요청 ID 생성 (IP + 메서드 + 원본 경로)
-		requestID := fmt.Sprintf("%s-%s-%s", clientIP, r.Method, originalPath)
-
-		// 중복 로깅 방지를 위한 검사
-		shouldLog := true
-
-		loggedRequestsMu.Lock()
-
-		// 이미 로깅된 요청인지 확인
-		if lastTime, exists := loggedRequests[requestID]; exists {
-			// 같은 요청이 최근 10ms 이내에 로깅되었다면 로깅하지 않음
-			if time.Since(lastTime) < 10*time.Millisecond {
-				shouldLog = false
-			}
-		}
-
-		// 중첩 경로 검사 (예: /protected/data가 /data를 포함하는 경우)
-		if shouldLog && strings.Count(originalPath, "/") > 1 {
-			// 마지막 세그먼트만 추출
-			lastSegment := originalPath
-			if idx := strings.LastIndex(originalPath, "/"); idx >= 0 {
-				lastSegment = originalPath[idx:]
-			}
-
-			// 다른 경로에서 같은 마지막 세그먼트를 가진 요청이 있는지 확인
-			for path, t := range loggedRequests {
-				// 최근 10ms 이내의 요청만 검사
-				if time.Since(t) < 10*time.Millisecond {
-					// 같은 마지막 세그먼트를 가진 다른 경로가 있으면 로깅하지 않음
-					if strings.HasSuffix(path, "-"+r.Method+"-"+lastSegment) && path != requestID {
-						shouldLog = false
-						break
-					}
-				}
-			}
-		}
-
-		// 현재 요청을 로깅된 요청 맵에 추가
-		if shouldLog {
-			loggedRequests[requestID] = startTime
-		}
-
-		// 맵 크기 제한 (메모리 누수 방지)
-		if len(loggedRequests) > 1000 {
-			// 오래된 항목 제거 (1초 이상 지난 항목)
-			now := time.Now()
-			for id, t := range loggedRequests {
-				if now.Sub(t) > 1*time.Second {
-					delete(loggedRequests, id)
-				}
-			}
-
-			// 여전히 크기가 크면 맵 초기화
-			if len(loggedRequests) > 900 {
-				loggedRequests = make(map[string]time.Time)
-			}
-		}
-
-		loggedRequestsMu.Unlock()
-
 		// 원본 경로와 로깅 상태를 컨텍스트에 저장
 		ctx := context.WithValue(r.Context(), originalPathKey, originalPath)
 		ctx = context.WithValue(ctx, requestLoggedKey, true)
@@ -185,40 +216,59 @@ func RequestLoggerMiddleware(next http.Handler) http.Handler {
 			statusCode:     http.StatusOK, // 기본값
 		}
 
+		// 응답 시작 시간
+		reqStartTime := time.Now()
+
 		// 다음 핸들러 호출
 		next.ServeHTTP(rw, r)
 
-		// 로깅 여부 결정
-		if shouldLog {
-			// 요청 처리 시간 계산
-			duration := time.Since(startTime)
+		// 요청 처리 시간 계산
+		duration := time.Since(reqStartTime)
 
-			// 요청 헤더 정보
-			userAgent := r.Header.Get("User-Agent")
-			if userAgent == "" {
-				userAgent = "-"
-			}
+		// 요청 헤더 정보
+		userAgent := r.Header.Get("User-Agent")
+		if userAgent == "" {
+			userAgent = "-"
+		}
 
-			// 메서드 색상
-			methodColor, ok := methodColors[r.Method]
-			if !ok {
-				methodColor = Reset
-			}
+		// 메서드 색상
+		methodColor, ok := methodColors[r.Method]
+		if !ok {
+			methodColor = Reset
+		}
 
-			// 상태 코드 색상
-			statusColor := statusCodeColor(rw.statusCode)
+		// 상태 코드 색상
+		statusColor := statusCodeColor(rw.statusCode)
 
-			// 한 줄로 요청 정보 출력
-			fmt.Printf("%s[%s]%s %s%d%s %s%s%s %s%.2fms%s %s%s%s %s%s%s %s%s%s %s%d bytes%s\n",
-				Yellow, startTime.Format("2006-01-02 15:04:05.000"), Reset,
-				statusColor, rw.statusCode, Reset,
-				methodColor, r.Method, Reset,
-				BoldBlue, float64(duration.Microseconds())/1000.0, Reset,
-				Cyan, clientIP, Reset,
-				Blue, originalPath, Reset, // 원본 경로 사용
-				Purple, truncateString(userAgent, 30), Reset,
-				Green, rw.written, Reset,
-			)
+		// 쿼리 파라미터 상세 로깅을 제외할 경로 목록
+		excludedPaths := []string{
+			"/ping",
+		}
+
+		// 로그 데이터 생성
+		logData := LogData{
+			OriginalPath:  originalPath,
+			StartTime:     startTime,
+			StatusCode:    rw.statusCode,
+			Method:        r.Method,
+			MethodColor:   methodColor,
+			StatusColor:   statusColor,
+			Duration:      duration,
+			ClientIP:      clientIP,
+			UserAgent:     userAgent,
+			Written:       rw.written,
+			QueryParams:   r.URL.RawQuery,
+			ExcludedPaths: excludedPaths,
+		}
+
+		// 로그 채널에 데이터 전송 (비동기 처리)
+		select {
+		case logChan <- logData:
+			// 채널에 성공적으로 전송됨
+		default:
+			// 채널이 가득 찼을 때는 로그를 버림 (백프레셔 처리)
+			// 이 경우에는 로깅 대신 부하 상황 알림 로그를 출력할 수 있음
+			// fmt.Println("로그 채널이 가득 찼습니다. 로그가 버려집니다.")
 		}
 	})
 }
