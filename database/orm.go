@@ -4,12 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"go_server_framework/loghandle"
 	"reflect"
 	"strings"
 	"time"
 	"unicode"
-
-	"go_server_framework/loghandle"
 )
 
 /*
@@ -38,17 +37,33 @@ ORM 패키지 사용 가이드
 
 3. 레코드 조회:
    ```go
-   // 단일 레코드
+   // 단일 레코드 조회 (조회 개수와 함께 반환)
    user := User{}
-   err := repo.FindOne(&user, map[string]interface{}{"id": 1})
+   count, err := repo.FindOne(&user, map[string]interface{}{"id": 1})
+   if err != nil {
+       log.Printf("에러: %v", err)
+   } else if count == 0 {
+       log.Printf("사용자를 찾을 수 없습니다")
+   } else {
+       log.Printf("사용자 조회 성공: %+v", user)
+   }
 
-   // 여러 레코드
+   // 여러 레코드 조회 (조회 개수와 함께 반환)
    var users []User
-   err := repo.FindAll(&users, &FindOptions{
+   count, err := repo.FindAll(&users, &FindOptions{
      Where: map[string]interface{}{"active": true},
      OrderBy: []string{"created_at DESC"},
      Limit: 10,
    })
+   if err != nil {
+       log.Printf("에러: %v", err)
+   } else {
+       log.Printf("조회된 사용자 수: %d", count)
+   }
+
+   // 사용자 정의 쿼리 (조회 개수와 함께 반환)
+   count, err := repo.FindOneByQuery(&user, "SELECT * FROM users WHERE email = ?", "test@example.com")
+   count, err := repo.FindAllByQuery(&users, "SELECT * FROM users WHERE created_at > ?", time.Now().AddDate(0, -1, 0))
    ```
 
 4. 레코드 생성/수정/삭제:
@@ -97,8 +112,15 @@ ORM 패키지 사용 가이드
   * lte: <=
   * ne: <>
   * like: LIKE
+  * ilike: LIKE (대소문자 무시, MySQL에서는 LOWER 함수 사용)
   * in: IN (value는 슬라이스)
+  * notin: NOT IN (value는 슬라이스)
   * null: IS NULL/IS NOT NULL (value는 bool)
+  * between: BETWEEN (value는 [시작값, 끝값] 슬라이스)
+  * contains: 문자열 포함 검사 (LIKE %값%)
+  * startswith: 문자열 시작 검사 (LIKE 값%)
+  * endswith: 문자열 끝 검사 (LIKE %값)
+  * regex: 정규식 검사 (MySQL REGEXP)
 
 - 정렬: `[]string{"field DESC", "field2"}`
 - 특정 컬럼만 조회: `Columns: []string{"id", "name"}`
@@ -262,6 +284,9 @@ func toSnakeCase(s string) string {
 
 // 기본 키 필드 찾기
 func getPrimaryKeyField(t reflect.Type) (string, bool, bool) {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if _, ok := field.Tag.Lookup("pk"); ok {
@@ -352,6 +377,148 @@ func getDefaultValue(field reflect.StructField) string {
 
 	// 기본값 없음
 	return ""
+}
+
+// buildWhereClause는 WHERE 절을 구성하고 파라미터를 반환하는 공통 함수입니다
+func buildWhereClause(where map[string]interface{}) (string, []interface{}) {
+	if len(where) == 0 {
+		return "", nil
+	}
+
+	conditions := make([]string, 0, len(where))
+	params := make([]interface{}, 0, len(where)*2)
+
+	for field, value := range where {
+		// 특수 연산자 확인 (예: field__gt, field__like 등)
+		parts := strings.Split(field, "__")
+		fieldName := parts[0]
+		operator := "="
+
+		if len(parts) > 1 {
+			// 특수 연산자 처리
+			switch parts[1] {
+			case "gt":
+				operator = ">"
+			case "gte":
+				operator = ">="
+			case "lt":
+				operator = "<"
+			case "lte":
+				operator = "<="
+			case "ne":
+				operator = "<>"
+			case "like":
+				operator = "LIKE"
+			case "ilike":
+				// MySQL에서는 ILIKE가 없으므로 LIKE + LOWER로 처리
+				conditions = append(conditions, fmt.Sprintf("LOWER(`%s`) LIKE LOWER(?)", fieldName))
+				params = append(params, value)
+				continue
+			case "in":
+				// IN 연산자 처리
+				if reflect.TypeOf(value).Kind() == reflect.Slice {
+					s := reflect.ValueOf(value)
+					if s.Len() > 0 {
+						placeholders := make([]string, s.Len())
+						for i := 0; i < s.Len(); i++ {
+							placeholders[i] = "?"
+							params = append(params, s.Index(i).Interface())
+						}
+						conditions = append(conditions, fmt.Sprintf("`%s` IN (%s)", fieldName, strings.Join(placeholders, ", ")))
+						continue
+					} else {
+						// 빈 슬라이스인 경우 경고 로그 출력 후 조건 무시
+						loghandle.Warn("buildWhereClause: 'in' 연산자는 비어있지 않은 슬라이스가 필요합니다. 필드: %s", fieldName)
+						continue
+					}
+				} else {
+					// 슬라이스가 아닌 경우 경고 로그 출력 후 조건 무시
+					loghandle.Warn("buildWhereClause: 'in' 연산자는 슬라이스 타입이 필요합니다. 필드: %s, 값 타입: %T", fieldName, value)
+					continue
+				}
+			case "notin":
+				// NOT IN 연산자 처리
+				if reflect.TypeOf(value).Kind() == reflect.Slice {
+					s := reflect.ValueOf(value)
+					if s.Len() > 0 {
+						placeholders := make([]string, s.Len())
+						for i := 0; i < s.Len(); i++ {
+							placeholders[i] = "?"
+							params = append(params, s.Index(i).Interface())
+						}
+						conditions = append(conditions, fmt.Sprintf("`%s` NOT IN (%s)", fieldName, strings.Join(placeholders, ", ")))
+						continue
+					} else {
+						// 빈 슬라이스인 경우 경고 로그 출력 후 조건 무시
+						loghandle.Warn("buildWhereClause: 'notin' 연산자는 비어있지 않은 슬라이스가 필요합니다. 필드: %s", fieldName)
+						continue
+					}
+				} else {
+					// 슬라이스가 아닌 경우 경고 로그 출력 후 조건 무시
+					loghandle.Warn("buildWhereClause: 'notin' 연산자는 슬라이스 타입이 필요합니다. 필드: %s, 값 타입: %T", fieldName, value)
+					continue
+				}
+			case "null":
+				// IS NULL 또는 IS NOT NULL 처리
+				if boolVal, ok := value.(bool); ok {
+					if boolVal {
+						conditions = append(conditions, fmt.Sprintf("`%s` IS NULL", fieldName))
+					} else {
+						conditions = append(conditions, fmt.Sprintf("`%s` IS NOT NULL", fieldName))
+					}
+					continue
+				} else {
+					// bool 타입이 아닌 경우 경고 로그 출력 후 조건 무시
+					loghandle.Warn("buildWhereClause: 'null' 연산자는 boolean 값이 필요합니다. 필드: %s, 값: %v (타입: %T)", fieldName, value, value)
+					continue
+				}
+			case "between":
+				// BETWEEN 연산자 처리
+				if reflect.TypeOf(value).Kind() == reflect.Slice {
+					s := reflect.ValueOf(value)
+					if s.Len() == 2 {
+						conditions = append(conditions, fmt.Sprintf("`%s` BETWEEN ? AND ?", fieldName))
+						params = append(params, s.Index(0).Interface(), s.Index(1).Interface())
+						continue
+					} else {
+						// 슬라이스 길이가 2가 아닌 경우 경고 로그 출력 후 조건 무시
+						loghandle.Warn("buildWhereClause: 'between' 연산자는 정확히 2개의 요소를 가진 슬라이스가 필요합니다. 필드: %s, 슬라이스 길이: %d", fieldName, s.Len())
+						continue
+					}
+				} else {
+					// 슬라이스가 아닌 경우 경고 로그 출력 후 조건 무시
+					loghandle.Warn("buildWhereClause: 'between' 연산자는 슬라이스 타입이 필요합니다. 필드: %s, 값 타입: %T", fieldName, value)
+					continue
+				}
+			case "contains":
+				// 문자열 포함 검사 (LIKE %값%)
+				conditions = append(conditions, fmt.Sprintf("`%s` LIKE ?", fieldName))
+				params = append(params, fmt.Sprintf("%%%v%%", value))
+				continue
+			case "startswith":
+				// 문자열 시작 검사 (LIKE 값%)
+				conditions = append(conditions, fmt.Sprintf("`%s` LIKE ?", fieldName))
+				params = append(params, fmt.Sprintf("%v%%", value))
+				continue
+			case "endswith":
+				// 문자열 끝 검사 (LIKE %값)
+				conditions = append(conditions, fmt.Sprintf("`%s` LIKE ?", fieldName))
+				params = append(params, fmt.Sprintf("%%%v", value))
+				continue
+			case "regex":
+				// 정규식 검사 (MySQL REGEXP)
+				conditions = append(conditions, fmt.Sprintf("`%s` REGEXP ?", fieldName))
+				params = append(params, value)
+				continue
+			}
+		}
+
+		// 기본 조건 추가
+		conditions = append(conditions, fmt.Sprintf("`%s` %s ?", fieldName, operator))
+		params = append(params, value)
+	}
+
+	return strings.Join(conditions, " AND "), params
 }
 
 // Repository는 모델에 대한 CRUD 작업을 제공합니다
@@ -573,12 +740,11 @@ func (r *Repository) CreateTableFromStruct(obj interface{}, ifNotExists bool, dr
 	return nil
 }
 
-// FindOneByQuery는 사용자 정의 쿼리로 단일 레코드를 조회합니다
-// 경고: 직접 SQL을 작성하는 대신 Find 또는 FindOne 함수 사용을 권장합니다.
-// 예: repo.FindOne(&user, map[string]interface{}{"id": 1})
-func (r *Repository) FindOneByQuery(dest interface{}, query string, args ...interface{}) error {
+// FindOneByQuery는 사용자 정의 SQL 쿼리로 단일 레코드를 조회하고 조회된 레코드 수를 반환합니다
+// 예: count, err := repo.FindOneByQuery(&user, "SELECT * FROM users WHERE id = ?", 1)
+func (r *Repository) FindOneByQuery(dest interface{}, query string, args ...interface{}) (int, error) {
 	if !r.IsConnected() {
-		return errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	if EnableSQLLogging {
@@ -588,7 +754,7 @@ func (r *Repository) FindOneByQuery(dest interface{}, query string, args ...inte
 	// 결과를 구조체로 스캔하기 위한 포인터 준비
 	pointers := getFieldPointers(dest)
 	if len(pointers) == 0 {
-		return errors.New("스캔할 필드가 없거나 dest가 적절한 구조체 타입이 아닙니다")
+		return -1, errors.New("스캔할 필드가 없거나 dest가 적절한 구조체 타입이 아닙니다")
 	}
 
 	// 쿼리 실행
@@ -596,22 +762,26 @@ func (r *Repository) FindOneByQuery(dest interface{}, query string, args ...inte
 
 	// 결과를 구조체로 스캔
 	if err := row.Scan(pointers...); err != nil {
-		return err
+		if errors.Is(err, sql.ErrNoRows) {
+			// 레코드가 없는 경우 ErrNoRows 에러 반환 (Go 관습에 따라)
+			return 0, sql.ErrNoRows
+		}
+		return -1, err
 	}
 
-	return nil
+	return 1, nil
 }
 
-// FindAllByQuery는 사용자 정의 SQL 쿼리로 여러 레코드를 조회합니다
-func (r *Repository) FindAllByQuery(dest interface{}, query string, args ...interface{}) error {
+// FindAllByQuery는 사용자 정의 SQL 쿼리로 여러 레코드를 조회하고 조회된 레코드 수를 반환합니다
+func (r *Repository) FindAllByQuery(dest interface{}, query string, args ...interface{}) (int, error) {
 	if !r.IsConnected() {
-		return errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	// dest는 슬라이스 포인터여야 함
 	destValue := reflect.ValueOf(dest)
 	if destValue.Kind() != reflect.Ptr || destValue.Elem().Kind() != reflect.Slice {
-		return errors.New("dest는 슬라이스 포인터여야 합니다")
+		return -1, errors.New("dest는 슬라이스 포인터여야 합니다")
 	}
 
 	if EnableSQLLogging {
@@ -621,7 +791,7 @@ func (r *Repository) FindAllByQuery(dest interface{}, query string, args ...inte
 	// 쿼리 실행
 	rows, err := r.handler.Query(query, args...)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	defer rows.Close()
 
@@ -641,12 +811,13 @@ func (r *Repository) FindAllByQuery(dest interface{}, query string, args ...inte
 	// 컬럼 정보 가져오기
 	columns, err := rows.Columns()
 	if err != nil {
-		return fmt.Errorf("컬럼 정보 가져오기 실패: %w", err)
+		return -1, fmt.Errorf("컬럼 정보 가져오기 실패: %w", err)
 	}
 
 	// 구조체 필드 매핑
 	fieldMap := getStructFieldsMap(structType)
 
+	count := 0
 	// 각 결과 행 처리
 	for rows.Next() {
 		// 새 요소 생성 (포인터 또는 값 타입에 따라)
@@ -700,7 +871,7 @@ func (r *Repository) FindAllByQuery(dest interface{}, query string, args ...inte
 
 		// 행 스캔
 		if err := rows.Scan(scanValues...); err != nil {
-			return fmt.Errorf("행 스캔 실패: %w", err)
+			return count, fmt.Errorf("행 스캔 실패: %w", err)
 		}
 
 		// NULL 값을 Go 기본값으로 변환
@@ -758,16 +929,18 @@ func (r *Repository) FindAllByQuery(dest interface{}, query string, args ...inte
 		} else {
 			sliceValue = reflect.Append(sliceValue, newElem)
 		}
+
+		count++
 	}
 
 	// 최종 슬라이스를 대상에 설정
 	destValue.Elem().Set(sliceValue)
 
 	if err := rows.Err(); err != nil {
-		return err
+		return -1, err
 	}
 
-	return nil
+	return count, nil
 }
 
 // getStructFieldsMap은 구조체의 필드를 컬럼명으로 인덱싱된 맵으로 반환합니다.
@@ -799,7 +972,7 @@ func getStructFieldsMap(structType reflect.Type) map[string]int {
 // InsertStruct는 구조체를 데이터베이스에 삽입합니다
 func (r *Repository) InsertStruct(obj interface{}) (int64, error) {
 	if !r.IsConnected() {
-		return 0, errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	t := reflect.TypeOf(obj)
@@ -811,7 +984,7 @@ func (r *Repository) InsertStruct(obj interface{}) (int64, error) {
 	}
 
 	if t.Kind() != reflect.Struct {
-		return 0, errors.New("객체는 구조체여야 합니다")
+		return -1, errors.New("객체는 구조체여야 합니다")
 	}
 
 	// 테이블 이름 가져오기
@@ -876,13 +1049,13 @@ func (r *Repository) InsertStruct(obj interface{}) (int64, error) {
 	// 쿼리 실행
 	result, err := r.handler.Exec(query, params...)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 마지막 삽입 ID 반환
 	id, err := result.LastInsertId()
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	return id, nil
@@ -891,7 +1064,7 @@ func (r *Repository) InsertStruct(obj interface{}) (int64, error) {
 // UpdateStruct는 구조체를 데이터베이스에서 업데이트합니다
 func (r *Repository) UpdateStruct(obj interface{}, where map[string]interface{}) (int64, error) {
 	if !r.IsConnected() {
-		return 0, errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	t := reflect.TypeOf(obj)
@@ -903,7 +1076,7 @@ func (r *Repository) UpdateStruct(obj interface{}, where map[string]interface{})
 	}
 
 	if t.Kind() != reflect.Struct {
-		return 0, errors.New("객체는 구조체여야 합니다")
+		return -1, errors.New("객체는 구조체여야 합니다")
 	}
 
 	// 테이블 이름 가져오기
@@ -972,7 +1145,7 @@ func (r *Repository) UpdateStruct(obj interface{}, where map[string]interface{})
 	}
 
 	if len(setFields) == 0 {
-		return 0, errors.New("업데이트할 필드가 없습니다")
+		return -1, errors.New("업데이트할 필드가 없습니다")
 	}
 
 	// 기본 쿼리 생성
@@ -980,12 +1153,9 @@ func (r *Repository) UpdateStruct(obj interface{}, where map[string]interface{})
 
 	// WHERE 절 추가
 	if len(where) > 0 {
-		conditions := []string{}
-		for field, value := range where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-			params = append(params, value)
-		}
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = append(params, whereParams...)
 	}
 
 	if EnableSQLLogging {
@@ -995,14 +1165,24 @@ func (r *Repository) UpdateStruct(obj interface{}, where map[string]interface{})
 	// 쿼리 실행
 	result, err := r.handler.Exec(query, params...)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 영향받은 행 수 반환
 	return result.RowsAffected()
 }
 
-// FindOptions는 Find 함수에 사용되는 옵션을 정의합니다
+// FindOptions는 Find 함수에서 사용할 옵션을 정의합니다
+//
+// 지원되는 WHERE 절 연산자:
+// - 기본: "field": value (= 연산자)
+// - 확장: "field__gt": value (>), "field__gte": value (>=), "field__lt": value (<), "field__lte": value (<=)
+// - 확장: "field__ne": value (!=), "field__like": value (LIKE), "field__ilike": value (ILIKE)
+// - 확장: "field__in": []value (IN), "field__notin": []value (NOT IN)
+// - 확장: "field__null": true/false (IS NULL/IS NOT NULL)
+// - 확장: "field__between": []value (BETWEEN), "field__contains": value (LIKE %value%)
+// - 확장: "field__startswith": value (LIKE value%), "field__endswith": value (LIKE %value)
+// - 확장: "field__regex": value (REGEXP)
 type FindOptions struct {
 	Where      map[string]interface{} // WHERE 조건
 	OrderBy    []string               // 정렬 필드 (필드명 또는 "필드명 DESC")
@@ -1014,64 +1194,67 @@ type FindOptions struct {
 	HavingCond map[string]interface{} // HAVING 조건
 }
 
-// Find는 조건에 맞는 레코드를 조회합니다
-func (r *Repository) Find(dest interface{}, options *FindOptions) error {
+// Find는 조건에 맞는 레코드를 조회하고 조회된 레코드 수를 반환합니다
+func (r *Repository) Find(dest interface{}, options *FindOptions) (int, error) {
 	if !r.IsConnected() {
-		return errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
+	// dest 검증
 	v := reflect.ValueOf(dest)
 	if v.Kind() != reflect.Ptr {
-		return errors.New("dest는 포인터여야 합니다")
+		return -1, errors.New("dest는 포인터여야 합니다")
 	}
+
 	elem := v.Elem()
-
-	// 테이블 이름과 객체 타입 가져오기
-	var tableName string
-	var isSingle bool
 	var structType reflect.Type
+	var isSingle bool
 
+	// 단일 구조체인지 슬라이스인지 확인
 	if elem.Kind() == reflect.Struct {
-		// 단일 구조체
-		isSingle = true
 		structType = elem.Type()
-		tableName = getTableName(elem.Interface())
+		isSingle = true
 	} else if elem.Kind() == reflect.Slice {
-		// 슬라이스
-		isSingle = false
-		// 슬라이스의 요소 타입 확인
-		sliceElemType := elem.Type().Elem()
-		if sliceElemType.Kind() == reflect.Ptr {
-			// 포인터 슬라이스인 경우 (예: []*Model)
-			structType = sliceElemType.Elem()
-			// 포인터가 가리키는 객체의 인스턴스 생성
-			newElem := reflect.New(structType).Elem()
-			tableName = getTableName(newElem.Interface())
+		sliceType := elem.Type()
+		elemType := sliceType.Elem()
+
+		// 슬라이스 요소가 포인터인지 확인
+		if elemType.Kind() == reflect.Ptr {
+			structType = elemType.Elem()
 		} else {
-			// 값 타입 슬라이스인 경우 (예: []Model)
-			structType = sliceElemType
-			// 값 타입의 인스턴스 생성
-			newElem := reflect.New(structType).Elem()
-			tableName = getTableName(newElem.Interface())
+			structType = elemType
 		}
+
+		if structType.Kind() != reflect.Struct {
+			return -1, errors.New("슬라이스 요소는 구조체여야 합니다")
+		}
+		isSingle = false
 	} else {
-		return errors.New("dest는 구조체 포인터 또는 구조체 슬라이스 포인터여야 합니다")
+		return -1, errors.New("dest는 구조체 포인터 또는 구조체 슬라이스 포인터여야 합니다")
 	}
 
-	// 쿼리 구성
+	// 테이블 이름 가져오기
+	tableName := getTableName(reflect.New(structType).Elem().Interface())
+
+	// 쿼리 생성
 	var queryBuilder strings.Builder
 	queryBuilder.WriteString("SELECT ")
 
+	// DISTINCT 처리
+	if options != nil && options.Distinct {
+		queryBuilder.WriteString("DISTINCT ")
+	}
+
 	// 컬럼 선택
-	var columns []string
 	if options != nil && len(options.Columns) > 0 {
-		columns = make([]string, len(options.Columns))
+		columns := make([]string, len(options.Columns))
 		for i, col := range options.Columns {
 			columns[i] = "`" + col + "`"
 		}
+		queryBuilder.WriteString(strings.Join(columns, ", "))
 	} else {
 		// 모든 필드 선택
-		columns = make([]string, 0, structType.NumField())
+		columns := make([]string, 0, structType.NumField())
 		for i := 0; i < structType.NumField(); i++ {
 			field := structType.Field(i)
 			if field.PkgPath == "" { // 공개 필드만 선택
@@ -1079,68 +1262,18 @@ func (r *Repository) Find(dest interface{}, options *FindOptions) error {
 				columns = append(columns, "`"+dbFieldName+"`")
 			}
 		}
+		queryBuilder.WriteString(strings.Join(columns, ", "))
 	}
-	queryBuilder.WriteString(strings.Join(columns, ", "))
+
 	queryBuilder.WriteString(fmt.Sprintf(" FROM `%s`", tableName))
 
 	// WHERE 절 구성
 	var params []interface{}
 	if options != nil && len(options.Where) > 0 {
 		queryBuilder.WriteString(" WHERE ")
-		conditions := make([]string, 0, len(options.Where))
-
-		for field, value := range options.Where {
-			// 특수 연산자 확인 (예: field__gt, field__like 등)
-			parts := strings.Split(field, "__")
-			fieldName := parts[0]
-			operator := "="
-
-			if len(parts) > 1 {
-				// 특수 연산자 처리
-				switch parts[1] {
-				case "gt":
-					operator = ">"
-				case "gte":
-					operator = ">="
-				case "lt":
-					operator = "<"
-				case "lte":
-					operator = "<="
-				case "ne":
-					operator = "<>"
-				case "like":
-					operator = "LIKE"
-				case "in":
-					// IN 연산자 처리
-					if reflect.TypeOf(value).Kind() == reflect.Slice {
-						s := reflect.ValueOf(value)
-						placeholders := make([]string, s.Len())
-						for i := 0; i < s.Len(); i++ {
-							placeholders[i] = "?"
-							params = append(params, s.Index(i).Interface())
-						}
-						conditions = append(conditions, fmt.Sprintf("`%s` IN (%s)", fieldName, strings.Join(placeholders, ", ")))
-						continue
-					}
-				case "null":
-					// IS NULL 또는 IS NOT NULL 처리
-					if value.(bool) {
-						conditions = append(conditions, fmt.Sprintf("`%s` IS NULL", fieldName))
-					} else {
-						conditions = append(conditions, fmt.Sprintf("`%s` IS NOT NULL", fieldName))
-					}
-					continue
-				}
-			}
-
-			// 기본 조건 추가
-			if operator != "IN" {
-				conditions = append(conditions, fmt.Sprintf("`%s` %s ?", fieldName, operator))
-				params = append(params, value)
-			}
-		}
-
-		queryBuilder.WriteString(strings.Join(conditions, " AND "))
+		whereClause, whereParams := buildWhereClause(options.Where)
+		queryBuilder.WriteString(whereClause)
+		params = whereParams
 	}
 
 	// GROUP BY 절 구성
@@ -1155,12 +1288,9 @@ func (r *Repository) Find(dest interface{}, options *FindOptions) error {
 		// HAVING 절 구성
 		if len(options.HavingCond) > 0 {
 			queryBuilder.WriteString(" HAVING ")
-			conditions := []string{}
-			for field, value := range options.HavingCond {
-				conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-				params = append(params, value)
-			}
-			queryBuilder.WriteString(strings.Join(conditions, " AND "))
+			havingClause, havingParams := buildWhereClause(options.HavingCond)
+			queryBuilder.WriteString(havingClause)
+			params = append(params, havingParams...)
 		}
 	}
 
@@ -1199,31 +1329,37 @@ func (r *Repository) Find(dest interface{}, options *FindOptions) error {
 		// 쿼리 실행
 		rows, err := r.handler.Query(query, params...)
 		if err != nil {
-			return err
+			return -1, err
 		}
 		defer rows.Close()
 
 		if !rows.Next() {
 			if err := rows.Err(); err != nil {
-				return err
+				return -1, err
 			}
-			return sql.ErrNoRows
+			// 빈 결과는 정상 상황으로 처리 (에러 없이 Count: 0 반환)
+			return 0, nil
 		}
 
 		// 컬럼 정보 가져오기
 		columns, err := rows.Columns()
 		if err != nil {
-			return fmt.Errorf("컬럼 정보 가져오기 실패: %w", err)
+			return -1, fmt.Errorf("컬럼 정보 가져오기 실패: %w", err)
 		}
 
 		// NULL 처리를 포함한 스캔 수행
-		return scanWithNullCheck(rows, columns, dest)
+		err = scanWithNullCheck(rows, columns, dest)
+		if err != nil {
+			return -1, err
+		}
+
+		return 1, nil
 	}
 
 	// 여러 레코드 조회
 	rows, err := r.handler.Query(query, params...)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	defer rows.Close()
 
@@ -1235,14 +1371,15 @@ func (r *Repository) Find(dest interface{}, options *FindOptions) error {
 	sliceValue := reflect.MakeSlice(elem.Type(), 0, 0)
 
 	// 컬럼 정보 가져오기
-	columns, err = rows.Columns()
+	columns, err := rows.Columns()
 	if err != nil {
-		return fmt.Errorf("컬럼 정보 가져오기 실패: %w", err)
+		return -1, fmt.Errorf("컬럼 정보 가져오기 실패: %w", err)
 	}
 
 	// 구조체 필드 매핑
 	fieldMap := getStructFieldsMap(structType)
 
+	count := 0
 	// 각 결과 행 처리
 	for rows.Next() {
 		// 새 요소 생성 (포인터 또는 값 타입에 따라)
@@ -1288,7 +1425,7 @@ func (r *Repository) Find(dest interface{}, options *FindOptions) error {
 
 		// 행 스캔
 		if err := rows.Scan(scanValues...); err != nil {
-			return fmt.Errorf("행 스캔 실패: %w", err)
+			return -1, fmt.Errorf("행 스캔 실패: %w", err)
 		}
 
 		// 임시 변수에서 복사해야 하는 경우 처리
@@ -1307,16 +1444,18 @@ func (r *Repository) Find(dest interface{}, options *FindOptions) error {
 		} else {
 			sliceValue = reflect.Append(sliceValue, newElem)
 		}
+
+		count++
 	}
 
 	// 최종 슬라이스를 대상에 설정
 	elem.Set(sliceValue)
 
 	if err := rows.Err(); err != nil {
-		return err
+		return -1, err
 	}
 
-	return nil
+	return count, nil
 }
 
 // scanWithNullCheck는 NULL 값을 적절히 처리하는 스캔 함수입니다
@@ -1423,8 +1562,8 @@ func scanWithNullCheck(rows *sql.Rows, columns []string, dest interface{}) error
 	return nil
 }
 
-// FindOne은 단일 레코드를 조회합니다
-func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) error {
+// FindOne은 단일 레코드를 조회하고 조회된 레코드 수를 반환합니다
+func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) (int, error) {
 	options := &FindOptions{
 		Where: where,
 		// Limit: 1,
@@ -1433,11 +1572,11 @@ func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) err
 	// 테이블 이름 가져오기
 	t := reflect.TypeOf(dest)
 	if t.Kind() != reflect.Ptr {
-		return errors.New("dest는 포인터여야 합니다")
+		return -1, errors.New("dest는 포인터여야 합니다")
 	}
 	t = t.Elem()
 	if t.Kind() != reflect.Struct {
-		return errors.New("dest는 구조체 포인터여야 합니다")
+		return -1, errors.New("dest는 구조체 포인터여야 합니다")
 	}
 
 	tableName := getTableName(reflect.New(t).Elem().Interface())
@@ -1472,14 +1611,9 @@ func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) err
 	var params []interface{}
 	if len(options.Where) > 0 {
 		queryBuilder.WriteString(" WHERE ")
-		conditions := make([]string, 0, len(options.Where))
-
-		for key, value := range options.Where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", key))
-			params = append(params, value)
-		}
-
-		queryBuilder.WriteString(strings.Join(conditions, " AND "))
+		whereClause, whereParams := buildWhereClause(options.Where)
+		queryBuilder.WriteString(whereClause)
+		params = whereParams
 	}
 
 	// LIMIT 추가
@@ -1494,36 +1628,42 @@ func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) err
 	// 쿼리 실행
 	rows, err := r.handler.Query(query, params...)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return err
+			return -1, err
 		}
-		return sql.ErrNoRows
+		// 레코드가 없는 경우 ErrNoRows 에러 반환 (Go 관습에 따라)
+		return 0, sql.ErrNoRows
 	}
 
 	// 컬럼 정보 가져오기
 	columns, err := rows.Columns()
 	if err != nil {
-		return fmt.Errorf("컬럼 정보 가져오기 실패: %w", err)
+		return -1, fmt.Errorf("컬럼 정보 가져오기 실패: %w", err)
 	}
 
 	// NULL 처리를 포함한 스캔 수행
-	return scanWithNullCheck(rows, columns, dest)
+	err = scanWithNullCheck(rows, columns, dest)
+	if err != nil {
+		return -1, err
+	}
+
+	return 1, nil
 }
 
-// FindAll은 여러 레코드를 조회합니다
-func (r *Repository) FindAll(dest interface{}, options *FindOptions) error {
+// FindAll은 여러 레코드를 조회하고 조회된 레코드 수를 반환합니다
+func (r *Repository) FindAll(dest interface{}, options *FindOptions) (int, error) {
 	return r.Find(dest, options)
 }
 
 // Count는 조건에 맞는 레코드 수를 반환합니다
 func (r *Repository) Count(obj interface{}, where map[string]interface{}) (int64, error) {
 	if !r.IsConnected() {
-		return 0, errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	t := reflect.TypeOf(obj)
@@ -1532,7 +1672,7 @@ func (r *Repository) Count(obj interface{}, where map[string]interface{}) (int64
 	}
 
 	if t.Kind() != reflect.Struct {
-		return 0, errors.New("객체는 구조체여야 합니다")
+		return -1, errors.New("객체는 구조체여야 합니다")
 	}
 
 	// 테이블 이름 가져오기
@@ -1544,13 +1684,9 @@ func (r *Repository) Count(obj interface{}, where map[string]interface{}) (int64
 
 	// WHERE 절 추가
 	if len(where) > 0 {
-		query += " WHERE "
-		conditions := []string{}
-		for field, value := range where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-			params = append(params, value)
-		}
-		query += strings.Join(conditions, " AND ")
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = whereParams
 	}
 
 	if EnableSQLLogging {
@@ -1564,7 +1700,7 @@ func (r *Repository) Count(obj interface{}, where map[string]interface{}) (int64
 	var count int64
 	err := row.Scan(&count)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	return count, nil
@@ -1627,12 +1763,9 @@ func (r *Repository) UpdateFields(tableName string, fields map[string]interface{
 
 	// WHERE 절 구성
 	if len(where) > 0 {
-		var conditions []string
-		for field, value := range where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-			params = append(params, value)
-		}
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = append(params, whereParams...)
 	}
 
 	// 로깅
@@ -1643,7 +1776,7 @@ func (r *Repository) UpdateFields(tableName string, fields map[string]interface{
 	// 쿼리 실행
 	result, err := r.handler.Exec(query, params...)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 영향받은 행 수 반환
@@ -1653,7 +1786,7 @@ func (r *Repository) UpdateFields(tableName string, fields map[string]interface{
 // UpdateFieldsByStruct updates specific fields in the database table based on the provided struct and conditions
 func (r *Repository) UpdateFieldsByStruct(obj interface{}, updateFields []string, where map[string]interface{}) (int64, error) {
 	if !r.IsConnected() {
-		return 0, errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	// 객체 타입 검증
@@ -1664,7 +1797,7 @@ func (r *Repository) UpdateFieldsByStruct(obj interface{}, updateFields []string
 		objValue = objValue.Elem()
 	}
 	if objType.Kind() != reflect.Struct {
-		return 0, errors.New("obj는 구조체 또는 구조체 포인터여야 합니다")
+		return -1, errors.New("obj는 구조체 또는 구조체 포인터여야 합니다")
 	}
 
 	// 테이블 이름 가져오기
@@ -1694,19 +1827,16 @@ func (r *Repository) UpdateFieldsByStruct(obj interface{}, updateFields []string
 	}
 
 	if len(setFields) == 0 {
-		return 0, errors.New("업데이트할 필드가 없습니다")
+		return -1, errors.New("업데이트할 필드가 없습니다")
 	}
 
 	query := fmt.Sprintf("UPDATE `%s` SET %s", tableName, strings.Join(setFields, ", "))
 
 	// WHERE 절 구성
 	if len(where) > 0 {
-		var conditions []string
-		for field, value := range where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-			params = append(params, value)
-		}
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = append(params, whereParams...)
 	}
 
 	// 로깅
@@ -1717,7 +1847,7 @@ func (r *Repository) UpdateFieldsByStruct(obj interface{}, updateFields []string
 	// 쿼리 실행
 	result, err := r.handler.Exec(query, params...)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 영향받은 행 수 반환
@@ -1727,7 +1857,7 @@ func (r *Repository) UpdateFieldsByStruct(obj interface{}, updateFields []string
 // UpsertStruct inserts a new record or updates an existing one based on the primary key
 func (r *Repository) UpsertStruct(obj interface{}) (int64, error) {
 	if r.handler == nil {
-		return 0, errors.New("데이터베이스 연결이 설정되지 않았습니다")
+		return -1, errors.New("데이터베이스 연결이 설정되지 않았습니다")
 	}
 
 	// 객체 타입 검증
@@ -1738,7 +1868,7 @@ func (r *Repository) UpsertStruct(obj interface{}) (int64, error) {
 		objValue = objValue.Elem()
 	}
 	if objType.Kind() != reflect.Struct {
-		return 0, errors.New("obj는 구조체 또는 구조체 포인터여야 합니다")
+		return -1, errors.New("obj는 구조체 또는 구조체 포인터여야 합니다")
 	}
 
 	// 테이블 이름 가져오기
@@ -1782,7 +1912,7 @@ func (r *Repository) UpsertStruct(obj interface{}) (int64, error) {
 	}
 
 	if len(columns) == 0 {
-		return 0, errors.New("삽입할 필드가 없습니다")
+		return -1, errors.New("삽입할 필드가 없습니다")
 	}
 
 	// 쿼리 구성
@@ -1807,13 +1937,13 @@ func (r *Repository) UpsertStruct(obj interface{}) (int64, error) {
 	// 쿼리 실행
 	result, err := r.handler.Exec(query, values...)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 영향받은 행 수 또는 마지막 삽입 ID 반환
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 행이 영향을 받지 않았다면 오류 반환
@@ -1972,12 +2102,9 @@ func (b *Batch) AddUpdate(obj interface{}, where map[string]interface{}) error {
 
 	// WHERE 절 구성
 	if len(where) > 0 {
-		var conditions []string
-		for field, value := range where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-			params = append(params, value)
-		}
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = append(params, whereParams...) // SET 파라미터 뒤에 WHERE 파라미터 추가
 	}
 
 	// 배치에 추가
@@ -1998,12 +2125,12 @@ func (b *Batch) AddDelete(obj interface{}, where map[string]interface{}) error {
 
 	// WHERE 절 추가
 	if len(where) > 0 {
-		conditions := []string{}
-		for field, value := range where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-			params = append(params, value)
-		}
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = whereParams
+	} else {
+		// WHERE 조건 없는 삭제 방지 (필요 시 주석 해제)
+		// return errors.New("AddDelete: WHERE 조건 없는 삭제는 위험합니다.")
 	}
 
 	// 배치에 추가
@@ -2013,61 +2140,96 @@ func (b *Batch) AddDelete(obj interface{}, where map[string]interface{}) error {
 	return nil
 }
 
-// Execute는 배치의 모든 작업을 실행합니다
+// Execute는 배치의 모든 작업을 하나의 트랜잭션으로 실행합니다
 func (b *Batch) Execute() (int64, error) {
 	if b.committed {
-		return 0, errors.New("배치가 이미 커밋되었습니다")
+		return -1, errors.New("배치가 이미 커밋되었습니다")
+	}
+	if len(b.queries) == 0 {
+		loghandle.Info("Batch.Execute: 실행할 작업이 없습니다.")
+		return 0, nil
+	}
+
+	if b.repo == nil || !b.repo.IsConnected() {
+		return -1, errors.New("Batch.Execute: 유효한 데이터베이스 연결이 없습니다.")
 	}
 
 	// 트랜잭션 시작
-	tx, err := b.repo.handler.Begin()
+	loghandle.Info("Batch: 트랜잭션 시작 (총 %d개 작업)", len(b.queries))
+	tx, err := b.repo.handler.Begin() // handler의 Begin 메서드 사용
 	if err != nil {
-		return 0, err
+		loghandle.Error("Batch: 트랜잭션 시작 실패: %v", err)
+		return 0, fmt.Errorf("트랜잭션 시작 실패: %w", err)
 	}
+
+	// defer를 사용하여 롤백 처리
+	shouldRollback := true
+	defer func() {
+		if shouldRollback {
+			loghandle.Warn("Batch: 오류 발생으로 트랜잭션 롤백 시도...")
+			rollbackErr := tx.Rollback()
+			if rollbackErr != nil {
+				loghandle.Error("Batch: 트랜잭션 롤백 중 추가 오류 발생: %v", rollbackErr)
+			} else {
+				loghandle.Warn("Batch: 트랜잭션 롤백 완료.")
+			}
+		}
+	}()
 
 	// 모든 쿼리 실행
 	var totalAffected int64 = 0
 	for i, query := range b.queries {
-		if EnableSQLLogging {
-			logSQL(query, b.params[i])
-		}
+		logSQL(query, b.params[i]) // 각 쿼리 로깅
 
 		result, err := tx.Exec(query, b.params[i]...)
 		if err != nil {
-			tx.Rollback()
-			return 0, err
+			loghandle.Error("Batch: 작업 %d/%d 실행 실패: %v", i+1, len(b.queries), err)
+			// 실패 시 쿼리와 파라미터 다시 로깅
+			loghandle.Error("Failed Query: %s", query)
+			loghandle.Error("Failed Params: %v", b.params[i])
+			// shouldRollback = true (defer가 롤백 처리)
+			return 0, fmt.Errorf("배치 작업 %d 실행 실패: %w", i+1, err)
 		}
 
 		affected, err := result.RowsAffected()
 		if err == nil {
 			totalAffected += affected
+			loghandle.Debug("Batch: 작업 %d/%d 실행 성공 (Affected: %d)", i+1, len(b.queries), affected)
+		} else {
+			loghandle.Warn("Batch: 작업 %d/%d 영향 받은 행 수 확인 실패: %v", i+1, len(b.queries), err)
 		}
 	}
 
 	// 트랜잭션 커밋
+	loghandle.Info("Batch: 모든 작업 성공, 트랜잭션 커밋 시도...")
 	err = tx.Commit()
 	if err != nil {
-		tx.Rollback()
-		return 0, err
+		loghandle.Error("Batch: 트랜잭션 커밋 실패: %v", err)
+		// shouldRollback = true (defer가 롤백 처리)
+		return 0, fmt.Errorf("트랜잭션 커밋 실패: %w", err)
 	}
 
+	shouldRollback = false // 커밋 성공, 롤백 방지
+	loghandle.Info("Batch: 트랜잭션 커밋 완료. (총 영향 받은 행: %d)", totalAffected)
 	b.committed = true
 	return totalAffected, nil
 }
 
-// Rollback는 배치의 모든 작업을 롤백합니다
+// Rollback은 배치의 모든 작업을 롤백합니다 (Execute 전에만 의미 있음)
 func (b *Batch) Rollback() error {
 	if b.committed {
 		return errors.New("배치가 이미 커밋되었습니다")
 	}
-
+	// 실제 롤백은 Execute 내부의 defer에서 처리됨
+	// 이 메서드는 주로 Execute 전에 작업을 취소하고 싶을 때 사용될 수 있음 (현재 구현은 비어있음)
+	loghandle.Warn("Batch.Rollback: 배치가 아직 실행되지 않았으므로 실제 롤백 작업은 수행되지 않습니다.")
 	return nil
 }
 
 // UpdateNonZero는 제로값이 아닌 필드만 업데이트합니다
 func (r *Repository) UpdateNonZero(obj interface{}, where map[string]interface{}, original ...interface{}) (int64, error) {
 	if !r.IsConnected() {
-		return 0, errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	t := reflect.TypeOf(obj)
@@ -2079,7 +2241,7 @@ func (r *Repository) UpdateNonZero(obj interface{}, where map[string]interface{}
 	}
 
 	if t.Kind() != reflect.Struct {
-		return 0, errors.New("객체는 구조체여야 합니다")
+		return -1, errors.New("객체는 구조체여야 합니다")
 	}
 
 	// 테이블 이름 가져오기
@@ -2137,7 +2299,7 @@ func (r *Repository) UpdateNonZero(obj interface{}, where map[string]interface{}
 	}
 
 	if len(setFields) == 0 {
-		return 0, errors.New("업데이트할 필드가 없습니다")
+		return -1, errors.New("업데이트할 필드가 없습니다")
 	}
 
 	// 기본 쿼리 생성
@@ -2145,12 +2307,9 @@ func (r *Repository) UpdateNonZero(obj interface{}, where map[string]interface{}
 
 	// WHERE 절 추가
 	if len(where) > 0 {
-		conditions := []string{}
-		for field, value := range where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-			params = append(params, value)
-		}
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = append(params, whereParams...)
 	}
 
 	if EnableSQLLogging {
@@ -2160,7 +2319,7 @@ func (r *Repository) UpdateNonZero(obj interface{}, where map[string]interface{}
 	// 쿼리 실행
 	result, err := r.handler.Exec(query, params...)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 영향받은 행 수 반환
@@ -2170,7 +2329,7 @@ func (r *Repository) UpdateNonZero(obj interface{}, where map[string]interface{}
 // DeleteStruct는 구조체에 해당하는 레코드를 삭제합니다
 func (r *Repository) DeleteStruct(obj interface{}, where map[string]interface{}) (int64, error) {
 	if !r.IsConnected() {
-		return 0, errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	// 테이블 이름 가져오기
@@ -2182,12 +2341,9 @@ func (r *Repository) DeleteStruct(obj interface{}, where map[string]interface{})
 
 	// WHERE 절 추가
 	if len(where) > 0 {
-		conditions := []string{}
-		for field, value := range where {
-			conditions = append(conditions, fmt.Sprintf("`%s` = ?", field))
-			params = append(params, value)
-		}
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = whereParams
 	}
 
 	if EnableSQLLogging {
@@ -2197,7 +2353,7 @@ func (r *Repository) DeleteStruct(obj interface{}, where map[string]interface{})
 	// 쿼리 실행
 	result, err := r.handler.Exec(query, params...)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 영향받은 행 수 반환
@@ -2212,7 +2368,7 @@ func (r *Repository) DeleteStruct(obj interface{}, where map[string]interface{})
 // UpsertNonZero는 제로값이 아닌 필드만 사용하여 새 레코드를 삽입하거나 기존 레코드를 업데이트합니다
 func (r *Repository) UpsertNonZero(obj interface{}) (int64, error) {
 	if !r.IsConnected() {
-		return 0, errors.New("데이터베이스 연결이 없습니다")
+		return -1, errors.New("데이터베이스 연결이 없습니다")
 	}
 
 	t := reflect.TypeOf(obj)
@@ -2224,7 +2380,7 @@ func (r *Repository) UpsertNonZero(obj interface{}) (int64, error) {
 	}
 
 	if t.Kind() != reflect.Struct {
-		return 0, errors.New("객체는 구조체여야 합니다")
+		return -1, errors.New("객체는 구조체여야 합니다")
 	}
 
 	// 테이블 이름 가져오기
@@ -2270,7 +2426,7 @@ func (r *Repository) UpsertNonZero(obj interface{}) (int64, error) {
 	}
 
 	if len(columns) == 0 {
-		return 0, errors.New("삽입할 필드가 없습니다")
+		return -1, errors.New("삽입할 필드가 없습니다")
 	}
 
 	// 쿼리 생성
@@ -2287,13 +2443,13 @@ func (r *Repository) UpsertNonZero(obj interface{}) (int64, error) {
 	// 쿼리 실행
 	result, err := r.handler.Exec(query, params...)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 영향받은 행 수 또는 마지막 삽입 ID 반환
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	// 행이 영향을 받지 않았다면 오류 반환
@@ -2322,4 +2478,113 @@ func (r *Repository) UpsertNonZero(obj interface{}) (int64, error) {
 	}
 
 	return rowsAffected, nil
+}
+
+// InsertList는 트랜잭션 내에서 여러 구조체 레코드를 벌크 INSERT 합니다.
+// items는 동일한 구조체 타입의 슬라이스여야 합니다 (포인터 권장).
+// tx 인자로 전달된 트랜잭션 내에서 실행됩니다.
+func InsertList(tx *sql.Tx, items []interface{}) error {
+	if len(items) == 0 {
+		loghandle.Debug("InsertList: 삽입할 항목이 없습니다.")
+		return nil // 삽입할 항목이 없으면 성공 처리
+	}
+
+	// 첫 번째 항목을 기반으로 타입 및 테이블 정보 가져오기
+	firstItem := items[0]
+	itemType := reflect.TypeOf(firstItem)
+	isPointer := itemType.Kind() == reflect.Ptr
+	if isPointer {
+		itemType = itemType.Elem() // 포인터면 실제 타입 가져오기
+	}
+	if itemType.Kind() != reflect.Struct {
+		return errors.New("InsertList: items 슬라이스는 구조체 또는 구조체 포인터를 포함해야 합니다")
+	}
+
+	tableName := getTableName(firstItem) // 테이블 이름 가져오기 (포인터/값 상관없이 동작)
+	loghandle.Debug("InsertList: 테이블 '%s'에 %d개 항목 삽입 시작", tableName, len(items))
+
+	pkField, _, isAuto := getPrimaryKeyField(itemType) // 타입 정보로 PK 확인
+
+	// 컬럼 목록 생성 (자동 증가 PK 제외)
+	var columns []string
+	var fieldIndices []int // 값 추출을 위한 필드 인덱스 저장
+	for i := 0; i < itemType.NumField(); i++ {
+		field := itemType.Field(i)
+		if field.PkgPath != "" { // 비공개 필드 무시
+			continue
+		}
+		dbFieldName := getDBFieldName(field)
+		// 자동 증가 PK 필드는 INSERT 컬럼 목록에서 제외
+		if isAuto && dbFieldName == pkField {
+			continue
+		}
+		columns = append(columns, "`"+dbFieldName+"`")
+		fieldIndices = append(fieldIndices, i) // 해당 컬럼 값의 필드 인덱스 저장
+	}
+
+	if len(columns) == 0 {
+		return fmt.Errorf("InsertList: 테이블 '%s'에 삽입할 컬럼이 없습니다 (PK만 있는 경우?)", tableName)
+	}
+	loghandle.Debug("InsertList: 테이블 '%s' 삽입 컬럼: %v", tableName, columns)
+
+	// VALUES (?, ?, ...), (?, ?, ...), ... 부분 생성 및 파라미터 준비
+	valueStrings := make([]string, 0, len(items))
+	allParams := make([]interface{}, 0, len(items)*len(columns))
+	placeholder := "(?" + strings.Repeat(",?", len(columns)-1) + ")" // (?,?,?) 형태
+
+	for idx, item := range items {
+		v := reflect.ValueOf(item)
+		if v.Kind() == reflect.Ptr {
+			// 타입 일관성 검사 (포인터 타입이어야 함)
+			if !isPointer || v.Type().Elem() != itemType {
+				return fmt.Errorf("InsertList: 슬라이스의 %d번째 항목 타입(%v)이 첫 번째 항목 타입(*%v)과 다릅니다", idx, v.Type(), itemType)
+			}
+			v = v.Elem() // 포인터면 실제 값으로
+		} else {
+			// 타입 일관성 검사 (값 타입이어야 함)
+			if isPointer || v.Type() != itemType {
+				return fmt.Errorf("InsertList: 슬라이스의 %d번째 항목 타입(%v)이 첫 번째 항목 타입(%v)과 다릅니다", idx, v.Type(), itemType)
+			}
+		}
+
+		// 구조체가 유효한지 확인
+		if !v.IsValid() || v.Kind() != reflect.Struct {
+			return fmt.Errorf("InsertList: 슬라이스의 %d번째 항목이 유효한 구조체가 아닙니다", idx)
+		}
+
+		valueStrings = append(valueStrings, placeholder) // 각 행에 대한 플레이스홀더 추가
+		// 저장된 필드 인덱스를 사용하여 파라미터 순서대로 추가
+		for _, fieldIndex := range fieldIndices {
+			if fieldIndex >= v.NumField() {
+				return fmt.Errorf("InsertList: %d번째 항목에서 필드 인덱스 %d 접근 오류", idx, fieldIndex)
+			}
+			fieldValue := v.Field(fieldIndex)
+			allParams = append(allParams, fieldValue.Interface())
+		}
+	}
+
+	// 최종 쿼리 생성
+	query := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES %s",
+		tableName,
+		strings.Join(columns, ", "),      // 컬럼 목록
+		strings.Join(valueStrings, ", "), // 플레이스홀더 목록
+	)
+
+	// 로깅 및 쿼리 실행 (전달받은 Tx 객체 사용)
+	logSQL(query, allParams)
+	result, err := tx.Exec(query, allParams...)
+	if err != nil {
+		// 쿼리 실패 시 로그에 쿼리와 파라미터 포함
+		loghandle.Error("InsertList: 벌크 INSERT 실패 (테이블: %s). Query: %s, Params: %v", tableName, query, allParams)
+		return fmt.Errorf("InsertList: 벌크 INSERT 실패 (테이블: %s): %w", tableName, err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		loghandle.Warn("InsertList: 영향받은 행 수 확인 실패 (테이블: %s): %v", tableName, err)
+	} else {
+		loghandle.Debug("InsertList: 테이블 '%s'에 %d개 항목 삽입 성공 (영향받은 행: %d)", tableName, len(items), rowsAffected)
+	}
+
+	return nil
 }
