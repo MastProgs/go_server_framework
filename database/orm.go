@@ -418,34 +418,60 @@ func buildWhereClause(where map[string]interface{}) (string, []interface{}) {
 				// IN 연산자 처리
 				if reflect.TypeOf(value).Kind() == reflect.Slice {
 					s := reflect.ValueOf(value)
-					placeholders := make([]string, s.Len())
-					for i := 0; i < s.Len(); i++ {
-						placeholders[i] = "?"
-						params = append(params, s.Index(i).Interface())
+					if s.Len() > 0 {
+						placeholders := make([]string, s.Len())
+						for i := 0; i < s.Len(); i++ {
+							placeholders[i] = "?"
+							params = append(params, s.Index(i).Interface())
+						}
+						conditions = append(conditions, fmt.Sprintf("`%s` IN (%s)", fieldName, strings.Join(placeholders, ", ")))
+						continue
+					} else {
+						// 빈 슬라이스인 경우 경고 로그 출력 후 조건 무시
+						loghandle.Warn("buildWhereClause: 'in' 연산자는 비어있지 않은 슬라이스가 필요합니다. 필드: %s", fieldName)
+						continue
 					}
-					conditions = append(conditions, fmt.Sprintf("`%s` IN (%s)", fieldName, strings.Join(placeholders, ", ")))
+				} else {
+					// 슬라이스가 아닌 경우 경고 로그 출력 후 조건 무시
+					loghandle.Warn("buildWhereClause: 'in' 연산자는 슬라이스 타입이 필요합니다. 필드: %s, 값 타입: %T", fieldName, value)
 					continue
 				}
 			case "notin":
 				// NOT IN 연산자 처리
 				if reflect.TypeOf(value).Kind() == reflect.Slice {
 					s := reflect.ValueOf(value)
-					placeholders := make([]string, s.Len())
-					for i := 0; i < s.Len(); i++ {
-						placeholders[i] = "?"
-						params = append(params, s.Index(i).Interface())
+					if s.Len() > 0 {
+						placeholders := make([]string, s.Len())
+						for i := 0; i < s.Len(); i++ {
+							placeholders[i] = "?"
+							params = append(params, s.Index(i).Interface())
+						}
+						conditions = append(conditions, fmt.Sprintf("`%s` NOT IN (%s)", fieldName, strings.Join(placeholders, ", ")))
+						continue
+					} else {
+						// 빈 슬라이스인 경우 경고 로그 출력 후 조건 무시
+						loghandle.Warn("buildWhereClause: 'notin' 연산자는 비어있지 않은 슬라이스가 필요합니다. 필드: %s", fieldName)
+						continue
 					}
-					conditions = append(conditions, fmt.Sprintf("`%s` NOT IN (%s)", fieldName, strings.Join(placeholders, ", ")))
+				} else {
+					// 슬라이스가 아닌 경우 경고 로그 출력 후 조건 무시
+					loghandle.Warn("buildWhereClause: 'notin' 연산자는 슬라이스 타입이 필요합니다. 필드: %s, 값 타입: %T", fieldName, value)
 					continue
 				}
 			case "null":
 				// IS NULL 또는 IS NOT NULL 처리
-				if value.(bool) {
-					conditions = append(conditions, fmt.Sprintf("`%s` IS NULL", fieldName))
+				if boolVal, ok := value.(bool); ok {
+					if boolVal {
+						conditions = append(conditions, fmt.Sprintf("`%s` IS NULL", fieldName))
+					} else {
+						conditions = append(conditions, fmt.Sprintf("`%s` IS NOT NULL", fieldName))
+					}
+					continue
 				} else {
-					conditions = append(conditions, fmt.Sprintf("`%s` IS NOT NULL", fieldName))
+					// bool 타입이 아닌 경우 경고 로그 출력 후 조건 무시
+					loghandle.Warn("buildWhereClause: 'null' 연산자는 boolean 값이 필요합니다. 필드: %s, 값: %v (타입: %T)", fieldName, value, value)
+					continue
 				}
-				continue
 			case "between":
 				// BETWEEN 연산자 처리
 				if reflect.TypeOf(value).Kind() == reflect.Slice {
@@ -454,7 +480,15 @@ func buildWhereClause(where map[string]interface{}) (string, []interface{}) {
 						conditions = append(conditions, fmt.Sprintf("`%s` BETWEEN ? AND ?", fieldName))
 						params = append(params, s.Index(0).Interface(), s.Index(1).Interface())
 						continue
+					} else {
+						// 슬라이스 길이가 2가 아닌 경우 경고 로그 출력 후 조건 무시
+						loghandle.Warn("buildWhereClause: 'between' 연산자는 정확히 2개의 요소를 가진 슬라이스가 필요합니다. 필드: %s, 슬라이스 길이: %d", fieldName, s.Len())
+						continue
 					}
+				} else {
+					// 슬라이스가 아닌 경우 경고 로그 출력 후 조건 무시
+					loghandle.Warn("buildWhereClause: 'between' 연산자는 슬라이스 타입이 필요합니다. 필드: %s, 값 타입: %T", fieldName, value)
+					continue
 				}
 			case "contains":
 				// 문자열 포함 검사 (LIKE %값%)
@@ -2122,7 +2156,7 @@ func (b *Batch) Execute() (int64, error) {
 
 	// 트랜잭션 시작
 	loghandle.Info("Batch: 트랜잭션 시작 (총 %d개 작업)", len(b.queries))
-	tx, err := b.repo.handler.db.Begin() // handler에서 직접 트랜잭션 시작
+	tx, err := b.repo.handler.Begin() // handler의 Begin 메서드 사용
 	if err != nil {
 		loghandle.Error("Batch: 트랜잭션 시작 실패: %v", err)
 		return 0, fmt.Errorf("트랜잭션 시작 실패: %w", err)
