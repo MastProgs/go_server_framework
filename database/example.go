@@ -1,6 +1,8 @@
 package database
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -81,9 +83,17 @@ func ExampleUsage() {
 
 	// 단일 레코드 조회
 	var result TblTest
-	_, err = repo.FindOneByQuery(&result, "SELECT * FROM tbl_test WHERE id = ?", id)
+	count, err := repo.FindOneByQuery(&result, "SELECT * FROM tbl_test WHERE id = ?", id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			loghandle.Error("ID %d에 해당하는 레코드를 찾을 수 없습니다", id)
+			return
+		}
 		loghandle.Error("데이터 조회 오류: %v", err)
+		return
+	}
+	if count == 0 {
+		loghandle.Error("ID %d에 해당하는 레코드를 찾을 수 없습니다", id)
 		return
 	}
 	loghandle.Info("조회 결과: %+v", result)
@@ -153,9 +163,15 @@ func ExampleUsage() {
 	loghandle.Info("=== 원본과 비교하여 변경된 필드만 업데이트 ===")
 	// 원본 데이터 조회
 	var originalRecord TblTest
-	_, err = repo.FindOne(&originalRecord, map[string]interface{}{"id": id})
+	count, err = repo.FindOne(&originalRecord, map[string]interface{}{"id": id})
 	if err != nil {
-		loghandle.Error("원본 데이터 조회 오류: %v", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			loghandle.Error("ID %d에 해당하는 원본 레코드를 찾을 수 없습니다", id)
+		} else {
+			loghandle.Error("원본 데이터 조회 오류: %v", err)
+		}
+	} else if count == 0 {
+		loghandle.Error("ID %d에 해당하는 원본 레코드를 찾을 수 없습니다", id)
 	} else {
 		// 원본과 변경된 데이터 준비
 		modifiedRecord := originalRecord     // 원본 복사
@@ -202,9 +218,15 @@ func ExampleUsage() {
 
 		// 결과 확인
 		var updatedRecord TblTest
-		_, err = repo.FindOne(&updatedRecord, map[string]interface{}{"id": nonZeroID})
+		count, err = repo.FindOne(&updatedRecord, map[string]interface{}{"id": nonZeroID})
 		if err != nil {
-			loghandle.Error("업데이트된 레코드 조회 오류: %v", err)
+			if errors.Is(err, sql.ErrNoRows) {
+				loghandle.Error("ID %d에 해당하는 업데이트된 레코드를 찾을 수 없습니다", nonZeroID)
+			} else {
+				loghandle.Error("업데이트된 레코드 조회 오류: %v", err)
+			}
+		} else if count == 0 {
+			loghandle.Error("ID %d에 해당하는 업데이트된 레코드를 찾을 수 없습니다", nonZeroID)
 		} else {
 			loghandle.Info("UpsertNonZero 결과 레코드: %+v", updatedRecord)
 		}
@@ -241,9 +263,15 @@ func ExampleUsage() {
 	// 1. 단일 레코드 조회 예제
 	loghandle.Info("=== 단일 레코드 조회 예제 ===")
 	user := TblTest{}
-	_, err = repo.FindOne(&user, map[string]interface{}{"id": id})
+	count, err = repo.FindOne(&user, map[string]interface{}{"id": id})
 	if err != nil {
-		loghandle.Error("단일 레코드 조회 오류: %v", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			loghandle.Error("ID %d에 해당하는 사용자를 찾을 수 없습니다", id)
+		} else {
+			loghandle.Error("단일 레코드 조회 오류: %v", err)
+		}
+	} else if count == 0 {
+		loghandle.Error("ID %d에 해당하는 사용자를 찾을 수 없습니다", id)
 	} else {
 		loghandle.Info("조회된 사용자: %+v", user)
 	}
@@ -251,12 +279,18 @@ func ExampleUsage() {
 	// 2. 특정 컬럼만 선택하여 조회
 	loghandle.Info("=== 특정 컬럼만 선택하여 조회 예제 ===")
 	selectedUser := TblTest{}
-	_, err = repo.Find(&selectedUser, &FindOptions{
+	count, err = repo.Find(&selectedUser, &FindOptions{
 		Where:   map[string]interface{}{"id": id},
 		Columns: []string{"id", "name"},
 	})
 	if err != nil {
-		loghandle.Error("특정 컬럼 조회 오류: %v", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			loghandle.Error("ID %d에 해당하는 레코드를 찾을 수 없습니다 (특정 컬럼 조회)", id)
+		} else {
+			loghandle.Error("특정 컬럼 조회 오류: %v", err)
+		}
+	} else if count == 0 {
+		loghandle.Error("ID %d에 해당하는 레코드를 찾을 수 없습니다 (특정 컬럼 조회)", id)
 	} else {
 		loghandle.Info("선택적 컬럼 조회 결과: %+v", selectedUser)
 	}
@@ -264,7 +298,7 @@ func ExampleUsage() {
 	// 3. 다양한 조건으로 여러 레코드 조회
 	loghandle.Info("=== 다양한 조건으로 여러 레코드 조회 예제 ===")
 	var users []TblTest
-	_, err = repo.FindAll(&users, &FindOptions{
+	count, err = repo.FindAll(&users, &FindOptions{
 		Where: map[string]interface{}{
 			"value__gt":  50.0, // value > 50.0
 			"active":     true,
@@ -277,7 +311,7 @@ func ExampleUsage() {
 	if err != nil {
 		loghandle.Error("다양한 조건 조회 오류: %v", err)
 	} else {
-		loghandle.Info("조회된 레코드 수: %d", len(users))
+		loghandle.Info("조회된 레코드 수: %d", count)
 		for i, u := range users {
 			loghandle.Info("  %d: %+v", i+1, u)
 		}
@@ -286,7 +320,7 @@ func ExampleUsage() {
 	// 4. IN 조건 사용 예제
 	loghandle.Info("=== IN 조건 사용 예제 ===")
 	var inUsers []TblTest
-	_, err = repo.Find(&inUsers, &FindOptions{
+	count, err = repo.Find(&inUsers, &FindOptions{
 		Where: map[string]interface{}{
 			"id__in": []int64{1, 2, 3, 5, 8},
 		},
@@ -294,16 +328,16 @@ func ExampleUsage() {
 	if err != nil {
 		loghandle.Error("IN 조건 조회 오류: %v", err)
 	} else {
-		loghandle.Info("IN 조건으로 조회된 레코드 수: %d", len(inUsers))
+		loghandle.Info("IN 조건으로 조회된 레코드 수: %d", count)
 	}
 
 	// 5. GROUP BY 및 COUNT 예제
 	loghandle.Info("=== 레코드 카운트 예제 ===")
-	count, err := repo.Count(&TblTest{}, map[string]interface{}{"active": true})
+	countResult, err := repo.Count(&TblTest{}, map[string]interface{}{"active": true})
 	if err != nil {
 		loghandle.Error("카운트 오류: %v", err)
 	} else {
-		loghandle.Info("활성 사용자 수: %d", count)
+		loghandle.Info("활성 사용자 수: %d", countResult)
 	}
 
 	// 6. NULL 값 처리 예제
@@ -326,12 +360,18 @@ func ExampleUsage() {
 
 	// NULL 값이 있는 레코드 조회
 	var nullRecord TblTest
-	_, err = repo.FindOne(&nullRecord, map[string]interface{}{
+	count, err = repo.FindOne(&nullRecord, map[string]interface{}{
 		"id": nullID,
 	})
 
 	if err != nil {
-		loghandle.Error("NULL 값 레코드 조회 오류: %v", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			loghandle.Error("ID %d에 해당하는 NULL 레코드를 찾을 수 없습니다", nullID)
+		} else {
+			loghandle.Error("NULL 값 레코드 조회 오류: %v", err)
+		}
+	} else if count == 0 {
+		loghandle.Error("ID %d에 해당하는 NULL 레코드를 찾을 수 없습니다", nullID)
 	} else {
 		loghandle.Info("NULL 값 레코드: %+v", nullRecord)
 		loghandle.Info("  - Email 필드 (NULL): '%s'", nullRecord.UserEmail)
@@ -339,7 +379,7 @@ func ExampleUsage() {
 
 	// NULL 조건으로 검색
 	var nullUsers []TblTest
-	_, err = repo.Find(&nullUsers, &FindOptions{
+	count, err = repo.Find(&nullUsers, &FindOptions{
 		Where: map[string]interface{}{
 			"user_email__null": true, // user_email이 NULL인 레코드 조회
 		},
@@ -348,7 +388,7 @@ func ExampleUsage() {
 	if err != nil {
 		loghandle.Error("NULL 처리 오류: %v", err)
 	} else {
-		loghandle.Info("이메일이 NULL인 사용자 수: %d", len(nullUsers))
+		loghandle.Info("이메일이 NULL인 사용자 수: %d", count)
 		for i, u := range nullUsers {
 			loghandle.Info("  %d: %+v", i+1, u)
 		}
@@ -356,7 +396,7 @@ func ExampleUsage() {
 
 	// NULL이 아닌 조건으로 검색
 	var notNullUsers []TblTest
-	_, err = repo.Find(&notNullUsers, &FindOptions{
+	count, err = repo.Find(&notNullUsers, &FindOptions{
 		Where: map[string]interface{}{
 			"user_email__null": false, // user_email이 NULL이 아닌 레코드 조회
 		},
@@ -365,7 +405,7 @@ func ExampleUsage() {
 	if err != nil {
 		loghandle.Error("NULL 아님 처리 오류: %v", err)
 	} else {
-		loghandle.Info("이메일이 NULL이 아닌 사용자 수: %d", len(notNullUsers))
+		loghandle.Info("이메일이 NULL이 아닌 사용자 수: %d", count)
 	}
 
 	// 7. 완전히 동적인 쿼리 구성 예제
@@ -398,11 +438,11 @@ func ExampleUsage() {
 	options.Offset = (page - 1) * pageSize
 
 	var pagedUsers []TblTest
-	_, err = repo.Find(&pagedUsers, options)
+	count, err = repo.Find(&pagedUsers, options)
 	if err != nil {
 		loghandle.Error("동적 쿼리 오류: %v", err)
 	} else {
-		loghandle.Info("페이지 %d의 조회 결과: %d개 레코드", page, len(pagedUsers))
+		loghandle.Info("페이지 %d의 조회 결과: %d개 레코드", page, count)
 	}
 
 	// ---------------------------------------------------

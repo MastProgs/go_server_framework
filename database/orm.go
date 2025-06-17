@@ -763,8 +763,8 @@ func (r *Repository) FindOneByQuery(dest interface{}, query string, args ...inte
 	// 결과를 구조체로 스캔
 	if err := row.Scan(pointers...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// 빈 결과는 정상 상황으로 처리
-			return 0, nil
+			// 레코드가 없는 경우 ErrNoRows 에러 반환 (Go 관습에 따라)
+			return 0, sql.ErrNoRows
 		}
 		return -1, err
 	}
@@ -1636,8 +1636,8 @@ func (r *Repository) FindOne(dest interface{}, where map[string]interface{}) (in
 		if err := rows.Err(); err != nil {
 			return -1, err
 		}
-		// 빈 결과는 정상 상황으로 처리 (에러 없이 Count: 0 반환)
-		return 0, nil
+		// 레코드가 없는 경우 ErrNoRows 에러 반환 (Go 관습에 따라)
+		return 0, sql.ErrNoRows
 	}
 
 	// 컬럼 정보 가져오기
