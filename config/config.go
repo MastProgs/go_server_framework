@@ -32,7 +32,7 @@ func (c *Config) loadConfig(filename string) error {
 // GetDSN은 데이터베이스 연결 문자열을 반환합니다
 func (c *Config) GetDSN() string {
 	if c.Database.Type == "mysql" {
-		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true",
+		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&loc=Asia%%2FSeoul",
 			c.Database.User, c.Database.Password, c.Database.Host,
 			c.Database.Port, c.Database.DBName)
 	}
