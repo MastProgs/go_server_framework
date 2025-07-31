@@ -228,6 +228,76 @@ func isZeroValue(v reflect.Value) bool {
 	}
 }
 
+func SetZero(obj interface{}) {
+	v := reflect.ValueOf(obj)
+
+	// 포인터가 아니면 패닉 방지
+	if v.Kind() != reflect.Ptr {
+		return
+	}
+
+	// nil 포인터 확인
+	if v.IsNil() {
+		return
+	}
+
+	// 실제 값으로 접근
+	v = v.Elem()
+
+	// 구조체가 아니면 리턴
+	if v.Kind() != reflect.Struct {
+		return
+	}
+
+	// 모든 필드를 순회하면서 제로값으로 설정
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+
+		// 필드가 설정 가능한지 확인
+		if !field.CanSet() {
+			continue
+		}
+
+		// 필드 타입에 따라 제로값 설정
+		switch field.Kind() {
+		case reflect.String:
+			field.SetString("")
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			field.SetInt(0)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			field.SetUint(0)
+		case reflect.Float32, reflect.Float64:
+			field.SetFloat(0)
+		case reflect.Bool:
+			field.SetBool(false)
+		case reflect.Slice, reflect.Map, reflect.Chan:
+			field.Set(reflect.Zero(field.Type()))
+		case reflect.Interface, reflect.Ptr:
+			field.Set(reflect.Zero(field.Type()))
+		case reflect.Array:
+			// 배열의 모든 요소를 제로값으로 설정
+			for j := 0; j < field.Len(); j++ {
+				if field.Index(j).CanSet() {
+					field.Index(j).Set(reflect.Zero(field.Index(j).Type()))
+				}
+			}
+		case reflect.Struct:
+			// time.Time 타입 처리
+			if field.Type() == reflect.TypeOf(time.Time{}) {
+				field.Set(reflect.Zero(field.Type()))
+			} else {
+				// 중첩 구조체는 재귀적으로 처리
+				if field.CanAddr() {
+					SetZero(field.Addr().Interface())
+				}
+			}
+		default:
+			// 기본적으로 제로값으로 설정
+			field.Set(reflect.Zero(field.Type()))
+		}
+	}
+}
+
 // 테이블 이름을 스네이크 케이스로 변환하는 함수
 func getTableName(obj interface{}) string {
 	t := reflect.TypeOf(obj)
