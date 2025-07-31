@@ -110,18 +110,6 @@ func ExampleUsage() {
 	}
 	loghandle.Info("업데이트된 행 수: %d", affected)
 
-	// UpdateNonZero 예제
-	uid := result.Id
-	nonZeroRecord := TblTest{
-		Name: "NonZero로 업데이트된 이름",
-	}
-	affected, err = repo.UpdateNonZero(nonZeroRecord, map[string]interface{}{"id": uid})
-	if err != nil {
-		loghandle.Error("NonZero로 업데이트 오류: %v", err)
-		return
-	}
-	loghandle.Info("NonZero로 업데이트된 행 수: %d", affected)
-
 	// UpdateFields 예제 (특정 필드만 업데이트)
 	loghandle.Info("=== UpdateFields 예제 ===")
 	fieldsToUpdate := map[string]interface{}{
