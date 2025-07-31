@@ -313,19 +313,35 @@ func (r *Repository) AddCounter(obj interface{}, fieldName string, value int64, 
 		return -1, errors.New("obj는 구조체 또는 구조체 포인터여야 합니다")
 	}
 
-	// 필드 존재성 및 타입 검증
-	field, found := objType.FieldByName(fieldName)
+	// 필드 존재성 및 타입 검증 - 모든 필드를 순회하면서 찾기
+	var targetField reflect.StructField
+	var targetDbFieldName string
+	var found bool
+
+	for i := 0; i < objType.NumField(); i++ {
+		field := objType.Field(i)
+
+		// 비공개 필드 무시
+		if field.PkgPath != "" {
+			continue
+		}
+
+		// 입력된 fieldName과 매칭 확인 (DB 필드명)
+		dbFieldName := getDBFieldName(field)
+		if fieldName == dbFieldName {
+			targetField = field
+			targetDbFieldName = dbFieldName
+			found = true
+			break
+		}
+	}
+
 	if !found {
 		return -1, fmt.Errorf("필드 '%s'를 찾을 수 없습니다", fieldName)
 	}
 
-	// 비공개 필드 확인
-	if field.PkgPath != "" {
-		return -1, fmt.Errorf("필드 '%s'는 비공개 필드입니다", fieldName)
-	}
-
 	// int형 타입인지 확인
-	fieldKind := field.Type.Kind()
+	fieldKind := targetField.Type.Kind()
 	if fieldKind != reflect.Int && fieldKind != reflect.Int8 && fieldKind != reflect.Int16 &&
 		fieldKind != reflect.Int32 && fieldKind != reflect.Int64 {
 		return -1, fmt.Errorf("필드 '%s'는 int형이 아닙니다. 실제 타입: %s", fieldName, fieldKind.String())
@@ -334,11 +350,8 @@ func (r *Repository) AddCounter(obj interface{}, fieldName string, value int64, 
 	// 테이블 이름 가져오기
 	tableName := getTableName(obj)
 
-	// DB 필드 이름 가져오기
-	dbFieldName := getDBFieldName(field)
-
 	// UPDATE 쿼리 생성 (필드 값을 기존 값에 더하기)
-	query := fmt.Sprintf("UPDATE `%s` SET `%s` = `%s` + ?", tableName, dbFieldName, dbFieldName)
+	query := fmt.Sprintf("UPDATE `%s` SET `%s` = `%s` + ?", tableName, targetDbFieldName, targetDbFieldName)
 	params := []interface{}{value}
 
 	// WHERE 절 구성
