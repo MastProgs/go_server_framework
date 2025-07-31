@@ -298,6 +298,70 @@ func SetZero(obj interface{}) {
 	}
 }
 
+// AddCounter는 객체의 int형 필드 값을 데이터베이스에서 증감시킵니다
+func (r *Repository) AddCounter(obj interface{}, fieldName string, value int64, where map[string]interface{}) (int64, error) {
+	if !r.IsConnected() {
+		return -1, errors.New("데이터베이스 연결이 없습니다")
+	}
+
+	// 객체 타입 검증
+	objType := reflect.TypeOf(obj)
+	if objType.Kind() == reflect.Ptr {
+		objType = objType.Elem()
+	}
+	if objType.Kind() != reflect.Struct {
+		return -1, errors.New("obj는 구조체 또는 구조체 포인터여야 합니다")
+	}
+
+	// 필드 존재성 및 타입 검증
+	field, found := objType.FieldByName(fieldName)
+	if !found {
+		return -1, fmt.Errorf("필드 '%s'를 찾을 수 없습니다", fieldName)
+	}
+
+	// 비공개 필드 확인
+	if field.PkgPath != "" {
+		return -1, fmt.Errorf("필드 '%s'는 비공개 필드입니다", fieldName)
+	}
+
+	// int형 타입인지 확인
+	fieldKind := field.Type.Kind()
+	if fieldKind != reflect.Int && fieldKind != reflect.Int8 && fieldKind != reflect.Int16 &&
+		fieldKind != reflect.Int32 && fieldKind != reflect.Int64 {
+		return -1, fmt.Errorf("필드 '%s'는 int형이 아닙니다. 실제 타입: %s", fieldName, fieldKind.String())
+	}
+
+	// 테이블 이름 가져오기
+	tableName := getTableName(obj)
+
+	// DB 필드 이름 가져오기
+	dbFieldName := getDBFieldName(field)
+
+	// UPDATE 쿼리 생성 (필드 값을 기존 값에 더하기)
+	query := fmt.Sprintf("UPDATE `%s` SET `%s` = `%s` + ?", tableName, dbFieldName, dbFieldName)
+	params := []interface{}{value}
+
+	// WHERE 절 구성
+	if len(where) > 0 {
+		whereClause, whereParams := buildWhereClause(where)
+		query += " WHERE " + whereClause
+		params = append(params, whereParams...)
+	}
+
+	if EnableSQLLogging {
+		logSQL(query, params)
+	}
+
+	// 쿼리 실행
+	result, err := r.handler.Exec(query, params...)
+	if err != nil {
+		return -1, fmt.Errorf("카운터 업데이트 실패: %w", err)
+	}
+
+	// 영향받은 행 수 반환
+	return result.RowsAffected()
+}
+
 // 테이블 이름을 스네이크 케이스로 변환하는 함수
 func getTableName(obj interface{}) string {
 	t := reflect.TypeOf(obj)
