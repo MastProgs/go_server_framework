@@ -1,113 +1,103 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"go_server_framework/config"
+	"go_server_framework/database"
+	"go_server_framework/game_services"
 	appInit "go_server_framework/init"
 	"go_server_framework/loghandle"
+	"go_server_framework/network"
+	"go_server_framework/packet_processor"
+	"go_server_framework/protocol"
 )
 
 func main() {
-	// 애플리케이션 초기화
-	err := appInit.InitAll()
-	if err != nil {
-		loghandle.Error("애플리케이션 InitAll 실패: %v", err)
-		os.Exit(1)
+	// 초기화
+	if err := appInit.InitAll(); err != nil {
+		loghandle.Error("초기화 실패: %v", err)
+		return
 	}
 
-	Config := config.GetConfig()
+	// 프로토콜 정보 출력
+	protocol.PrintAllPackets()
 
-	port := fmt.Sprintf(":%d", Config.Server.Port)
-	srv := &http.Server{
-		Addr:    port,
-		Handler: appInit.Router,
-	}
+	// 설정 조회
+	cfg := config.GetConfig()
 
-	err = appInit.PreInit()
+	err := appInit.PreInit()
 	if err != nil {
 		loghandle.Error("애플리케이션 PreInit 실패: %v", err)
 		os.Exit(1)
 	}
 
-	// 서버 종료를 위한 에러 채널 생성
-	errChan := make(chan error, 1)
+	// TCP 게임서버 설정
+	serverConfig := network.ServerConfig{
+		Address:        fmt.Sprintf(":%d", cfg.Server.Port),
+		MaxConnections: 1000, // 기본값
+	}
 
-	// 서버를 고루틴에서 시작
-	go func() {
-		loghandle.Info("Server is running on %s port...", port)
-		if Config.Server.Debug {
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				loghandle.Error("HTTP server ListenAndServe error: %v", err)
-				errChan <- fmt.Errorf("HTTP 서버 에러: %v", err)
-				return
-			}
-		} else {
-			if Config.Server.Certfile != "" && Config.Server.Keyfile != "" {
-				// 인증서 파일 존재 여부 확인
-				if _, err := os.Stat(Config.Server.Certfile); os.IsNotExist(err) {
-					loghandle.Error("인증서 파일을 찾을 수 없습니다: %s", Config.Server.Certfile)
-					errChan <- fmt.Errorf("인증서 파일을 찾을 수 없습니다: %s", Config.Server.Certfile)
-					return
-				}
+	// 게임서버 생성
+	gameServer := network.NewGameServer(serverConfig)
 
-				// 키 파일 존재 여부 확인
-				if _, err := os.Stat(Config.Server.Keyfile); os.IsNotExist(err) {
-					loghandle.Error("키 파일을 찾을 수 없습니다: %s", Config.Server.Keyfile)
-					errChan <- fmt.Errorf("키 파일을 찾을 수 없습니다: %s", Config.Server.Keyfile)
-					return
-				}
+	// 패킷 프로세서 생성
+	processorConfig := packet_processor.ProcessorConfig{
+		QueueSize:   1000,
+		WorkerCount: 10,
+	}
+	processor := packet_processor.NewPacketProcessor(processorConfig, gameServer.GetConnectionManager())
 
-				if err := srv.ListenAndServeTLS(Config.Server.Certfile, Config.Server.Keyfile); err != nil && err != http.ErrServerClosed {
-					loghandle.Error("HTTPS server ListenAndServeTLS error: %v", err)
-					errChan <- fmt.Errorf("HTTPS 서버 에러: %v", err)
-					return
-				}
-			} else {
-				loghandle.Error("HTTPS server Certfile or Keyfile is not set")
-				errChan <- fmt.Errorf("HTTPS 서버 인증서 또는 키 파일이 설정되지 않았습니다")
-				return
-			}
-		}
-	}()
+	// 게임 서비스 매니저 생성 및 서비스 등록
+	repo, err := database.NewRepository()
+	if err != nil {
+		loghandle.Error("데이터베이스 리포지토리 생성 실패: %v", err)
+		return
+	}
+	gameServiceManager := game_services.NewGameServiceManager(processor, repo)
+	if err := gameServiceManager.RegisterAllGameServices(); err != nil {
+		loghandle.Error("게임 서비스 등록 실패: %v", err)
+		return
+	}
 
-	// 종료 시그널을 기다림
+	// 서버 시작
+	loghandle.Info("TCP 게임서버 시작 중...")
+
+	if err := gameServer.Start(); err != nil {
+		loghandle.Error("게임서버 시작 실패: %v", err)
+		return
+	}
+
+	if err := processor.Start(); err != nil {
+		loghandle.Error("패킷 프로세서 시작 실패: %v", err)
+		gameServer.Stop()
+		return
+	}
+
+	loghandle.Info("🎮 TCP 게임서버 시작 완료!")
+	loghandle.Info("📡 주소: %s", serverConfig.Address)
+	loghandle.Info("🔗 최대 연결: %d", serverConfig.MaxConnections)
+	loghandle.Info("⚡ 워커 수: %d", processorConfig.WorkerCount)
+	loghandle.Info("📦 큐 크기: %d", processorConfig.QueueSize)
+
+	// Graceful shutdown을 위한 채널
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	// 종료 시그널과 에러 채널을 동시에 처리
-	select {
-	case <-quit:
-		loghandle.Info("정상 종료 시그널을 받았습니다...")
-	case err := <-errChan:
-		loghandle.Error("서버 에러 발생으로 종료합니다: %v", err)
-	}
+	loghandle.Info("서버가 시작되었습니다. 종료하려면 Ctrl+C를 누르세요.")
 
-	// 서버 종료 처리
-	loghandle.Info("서버를 종료하는 중...")
+	// 종료 신호 대기
+	<-quit
+	loghandle.Info("서버 종료 신호 수신...")
 
-	// 서버 종료를 위한 컨텍스트 생성
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// Graceful shutdown
+	gameServer.GracefulShutdown(30 * time.Second)
+	processor.Stop()
+	gameServiceManager.Shutdown()
 
-	// 서버 종료
-	if err := srv.Shutdown(ctx); err != nil {
-		loghandle.Error("Server Shutdown error: %v", err)
-	}
-
-	// 애플리케이션 종료
-	err = appInit.ShutdownAll()
-	if err != nil {
-		loghandle.Error("애플리케이션 종료 실패: %v", err)
-		os.Exit(1)
-	}
-
-	loghandle.Info("서버가 종료되었습니다")
-	os.Exit(1) // 에러로 인한 종료는 1을 반환
+	loghandle.Info("🎯 TCP 게임서버가 정상적으로 종료되었습니다.")
 }
